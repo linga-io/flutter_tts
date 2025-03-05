@@ -239,7 +239,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
 
                 try {
                     engineResult!!.success(1)
-                 } catch (e: Exception) {
+                 } catch (e: IllegalStateException) {
                     Log.d(tag, "OnInitListener: " + e.message)
                 }
             } else {

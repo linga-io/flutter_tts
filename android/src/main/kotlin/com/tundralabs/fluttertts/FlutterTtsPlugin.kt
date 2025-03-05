@@ -237,7 +237,11 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     Log.e(tag, "getDefaultLocale: " + e.message)
                 }
 
-                engineResult!!.success(1)
+                try {
+                    engineResult!!.success(1)
+                 } catch (e: Exception) {
+                    Log.d(tag, "OnInitListener: " + e.message)
+                }
             } else {
                 engineResult!!.error("TtsError","Failed to initialize TextToSpeech with status: $status", null)
             }

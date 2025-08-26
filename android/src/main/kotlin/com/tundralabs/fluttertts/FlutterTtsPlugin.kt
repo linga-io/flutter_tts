@@ -54,6 +54,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     private var isPaused: Boolean = false
     private var queueMode: Int = TextToSpeech.QUEUE_FLUSH
     private var ttsStatus: Int? = null
+    private var selectedEngine: String? = null
     private var engineResult: Result? = null
     private var parcelFileDescriptor: ParcelFileDescriptor? = null
     private var audioManager: AudioManager? = null
@@ -70,7 +71,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         methodChannel!!.setMethodCallHandler(this)
         handler = Handler(Looper.getMainLooper())
         bundle = Bundle()
-        tts = TextToSpeech(context, firstTimeOnInitListener)
+        tts = TextToSpeech(context, onInitListenerWithoutCallback)
     }
 
     /** Android Plugin APIs  */
@@ -213,7 +214,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         }
     }
 
-    private val onInitListener: TextToSpeech.OnInitListener =
+    private val onInitListenerWithCallback: TextToSpeech.OnInitListener =
         TextToSpeech.OnInitListener { status ->
             // Handle pending method calls (sent while TTS was initializing)
             synchronized(this@FlutterTtsPlugin) {
@@ -250,7 +251,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             //engineResult = null
         }
 
-    private val firstTimeOnInitListener: TextToSpeech.OnInitListener =
+    private val onInitListenerWithoutCallback: TextToSpeech.OnInitListener =
         TextToSpeech.OnInitListener { status ->
             // Handle pending method calls (sent while TTS was initializing)
             synchronized(this@FlutterTtsPlugin) {
@@ -501,8 +502,9 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
 
     private fun setEngine(engine: String?, result: Result) {
         ttsStatus = null
+        selectedEngine = engine
         engineResult = result
-        tts = TextToSpeech(context, onInitListener, engine)
+        tts = TextToSpeech(context, onInitListenerWithCallback, engine)
     }
 
     private fun setLanguage(language: String?, result: Result) {
@@ -685,7 +687,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             }
         } else {
             ttsStatus = null
-            tts = TextToSpeech(context, onInitListener)
+            tts = TextToSpeech(context, onInitListenerWithoutCallback, selectedEngine)
             false
         }
     }

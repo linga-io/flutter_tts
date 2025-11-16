@@ -15,8 +15,8 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   var voice: AVSpeechSynthesisVoice?
   var awaitSpeakCompletion: Bool = false
   var awaitSynthCompletion: Bool = false
-  var speakResult: FlutterResult!
-  var synthResult: FlutterResult!
+  var speakResult: FlutterResult? = nil
+  var synthResult: FlutterResult? = nil
 
   var channel = FlutterMethodChannel()
   init(channel: FlutterMethodChannel) {
@@ -345,11 +345,13 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-    if self.awaitSpeakCompletion {
-      self.speakResult(1)
+    if self.awaitSpeakCompletion && self.speakResult != nil {
+      self.speakResult!(1)
+      self.speakResult = nil
     }
-    if self.awaitSynthCompletion {
-      self.synthResult(1)
+    if self.awaitSynthCompletion && self.synthResult != nil {
+      self.synthResult!(1)
+      self.synthResult = nil
     }
     self.channel.invokeMethod("speak.onComplete", arguments: nil)
   }

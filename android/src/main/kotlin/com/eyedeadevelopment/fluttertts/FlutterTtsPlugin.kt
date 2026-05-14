@@ -238,7 +238,13 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     Log.e(tag, "getDefaultLocale: " + e.message)
                 }
 
-                engineResult!!.success(1)
+                try {
+                    if (engineResult != null) {
+                        engineResult!!.success(1)
+                    }
+                } catch (e: IllegalStateException) {
+                    Log.d(tag, "OnInitListener: " + e.message)
+                }
             } else {
                 engineResult!!.error("TtsError","Failed to initialize TextToSpeech with status: $status", null)
             }
@@ -622,7 +628,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         map["latency"] = latencyToString(voice.latency)
         map["network_required"] = if (voice.isNetworkConnectionRequired) "1" else "0"
         map["features"] = voice.features.joinToString(separator = "\t")
-        
+
     }
 
     // Function to map quality integer to the constant name

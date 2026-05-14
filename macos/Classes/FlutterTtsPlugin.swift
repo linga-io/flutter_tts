@@ -5,7 +5,7 @@ import AVFoundation
 public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDelegate {
   final var iosAudioCategoryKey = "iosAudioCategoryKey"
   final var iosAudioCategoryOptionsKey = "iosAudioCategoryOptionsKey"
-  
+
   let synthesizer = AVSpeechSynthesizer()
   var language: String = AVSpeechSynthesisVoice.currentLanguageCode()
   var rate: Float = AVSpeechUtteranceDefaultSpeechRate
@@ -15,8 +15,8 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   var voice: AVSpeechSynthesisVoice?
   var awaitSpeakCompletion: Bool = false
   var awaitSynthCompletion: Bool = false
-  var speakResult: FlutterResult!
-  var synthResult: FlutterResult!
+  var speakResult: FlutterResult? = nil
+  var synthResult: FlutterResult? = nil
 
   var channel = FlutterMethodChannel()
   init(channel: FlutterMethodChannel) {
@@ -135,7 +135,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
       utterance.rate = self.rate
       utterance.volume = self.volume
       utterance.pitchMultiplier = self.pitch
-      
+
       self.synthesizer.speak(utterance)
       if self.awaitSpeakCompletion {
         self.speakResult = result
@@ -144,7 +144,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
       }
     }
   }
-  
+
   private func synthesizeToFile(text: String, fileName: String, result: @escaping FlutterResult) {
     var output: AVAudioFile?
     var failed = false
@@ -163,12 +163,12 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
           // append buffer to file
           let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent(fileName)
           NSLog("Saving utterance to file: \(fileURL.absoluteString)")
-            
+
           if output == nil {
             do {
               output = try AVAudioFile(
               forWriting: fileURL,
-              settings: pcmBuffer.format.settings, 
+              settings: pcmBuffer.format.settings,
               commonFormat: .pcmFormatFloat32,
               interleaved: false)
             } catch {
@@ -177,7 +177,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
                 return
             }
           }
-            
+
           try! output!.write(from: pcmBuffer)
         }
       }
@@ -233,7 +233,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
       result(0)
     }
   }
-    
+
   private func stop() {
     self.synthesizer.stopSpeaking(at: AVSpeechBoundary.immediate)
   }
@@ -296,17 +296,17 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
                   return
               }
           }
-          
+
           // If no valid identifier, search by name and locale, then prioritize by quality
           if let name = voice["name"], let locale = voice["locale"] {
               let matchingVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.name == name && $0.language == locale }
-              
+
               if !matchingVoices.isEmpty {
                   // Sort voices by quality: premium (if available) > enhanced > others
                   let sortedVoices = matchingVoices.sorted { (voice1, voice2) -> Bool in
                       let quality1 = voice1.quality
                       let quality2 = voice2.quality
-                      
+
                       // macOS 13.0+ supports premium quality
                       if #available(macOS 13.0, *) {
                           if quality1 == .premium {
@@ -325,7 +325,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
                           }
                       }
                   }
-                  
+
                   // Select the highest quality voice
                   if let selectedVoice = sortedVoices.first {
                       self.voice = selectedVoice
@@ -335,7 +335,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
                   }
               }
           }
-          
+
           // No matching voice found
           result(0)
       } else {
@@ -345,11 +345,13 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-    if self.awaitSpeakCompletion {
-      self.speakResult(1)
+    if self.awaitSpeakCompletion && self.speakResult != nil {
+      self.speakResult!(1)
+      self.speakResult = nil
     }
-    if self.awaitSynthCompletion {
-      self.synthResult(1)
+    if self.awaitSynthCompletion && self.synthResult != nil {
+      self.synthResult!(1)
+      self.synthResult = nil
     }
     self.channel.invokeMethod("speak.onComplete", arguments: nil)
   }

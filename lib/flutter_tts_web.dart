@@ -133,7 +133,12 @@ class FlutterTtsPlugin {
   }
 
   Future<dynamic> handleMethodCall(MethodCall call) async {
-    if (!supported) return;
+    if (!supported) {
+      throw PlatformException(
+        code: 'Unavailable',
+        details: "The browser doesn't support speech synthesis.",
+      );
+    }
     switch (call.method) {
       case 'speak':
         final text = call.arguments as String?;

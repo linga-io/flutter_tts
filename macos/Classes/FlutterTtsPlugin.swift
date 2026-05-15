@@ -16,7 +16,6 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   var awaitSpeakCompletion: Bool = false
   var awaitSynthCompletion: Bool = false
   var speakResult: FlutterResult? = nil
-  var synthResult: FlutterResult? = nil
   var synthesizeUtteranceIds = Set<ObjectIdentifier>()
 
   var channel = FlutterMethodChannel()
@@ -433,10 +432,6 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
     if self.awaitSpeakCompletion && self.speakResult != nil {
       self.speakResult!(1)
       self.speakResult = nil
-    }
-    if self.awaitSynthCompletion && self.synthResult != nil {
-      self.synthResult!(1)
-      self.synthResult = nil
     }
     self.channel.invokeMethod("speak.onComplete", arguments: nil)
   }

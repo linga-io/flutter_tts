@@ -16,7 +16,6 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
   var awaitSynthCompletion: Bool = false
   var autoStopSharedSession: Bool = true
   var speakResult: FlutterResult? = nil
-  var synthResult: FlutterResult? = nil
   var synthesizeUtteranceIds = Set<ObjectIdentifier>()
   
   lazy var audioSession = AVAudioSession.sharedInstance()
@@ -517,10 +516,6 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
     if self.awaitSpeakCompletion && self.speakResult != nil {
         self.speakResult!(1)
         self.speakResult = nil
-    }
-    if self.awaitSynthCompletion && self.synthResult != nil {
-      self.synthResult!(1)
-      self.synthResult = nil
     }
     self.channel.invokeMethod("speak.onComplete", arguments: nil)
   }

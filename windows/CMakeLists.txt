@@ -7,17 +7,26 @@ endif()
 set(PROJECT_NAME "flutter_tts")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
-find_program(NUGET_EXE NAMES nuget)
-if(NOT NUGET_EXE)
-    message(FATAL_ERROR "nuget.exe not found. Please install it.")
-endif()
+set(CPPWINRT_PACKAGE_DIR "${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.CppWinRT")
+if(NOT EXISTS "${CPPWINRT_PACKAGE_DIR}/build/native/Microsoft.Windows.CppWinRT.props")
+    find_program(NUGET_EXE NAMES nuget)
+    if(NOT NUGET_EXE)
+        message(FATAL_ERROR "nuget.exe not found. Install NuGet CLI or add it to PATH before building flutter_tts for Windows.")
+    endif()
 
-execute_process(
-        COMMAND ${NUGET_EXE} install Microsoft.Windows.CppWinRT
-        -Version 2.0.210503.1
-        -ExcludeVersion
-        -OutputDirectory ${CMAKE_BINARY_DIR}/packages
-)
+    execute_process(
+            COMMAND ${NUGET_EXE} install Microsoft.Windows.CppWinRT
+            -Version 2.0.210503.1
+            -ExcludeVersion
+            -OutputDirectory ${CMAKE_BINARY_DIR}/packages
+            RESULT_VARIABLE NUGET_RESULT
+            OUTPUT_VARIABLE NUGET_OUTPUT
+            ERROR_VARIABLE NUGET_ERROR
+    )
+    if(NOT NUGET_RESULT EQUAL 0)
+        message(FATAL_ERROR "Failed to restore Microsoft.Windows.CppWinRT with NuGet.\n${NUGET_OUTPUT}\n${NUGET_ERROR}")
+    endif()
+endif()
 
 set(PLUGIN_NAME "flutter_tts_plugin")
 
@@ -45,11 +54,11 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE
 )
 
 set_target_properties(${PLUGIN_NAME} PROPERTIES VS_PROJECT_IMPORT
-        "${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.CppWinRT/build/native/Microsoft.Windows.CppWinRT.props"
+        "${CPPWINRT_PACKAGE_DIR}/build/native/Microsoft.Windows.CppWinRT.props"
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-        "${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.CppWinRT/build/native/Microsoft.Windows.CppWinRT.targets"
+        "${CPPWINRT_PACKAGE_DIR}/build/native/Microsoft.Windows.CppWinRT.targets"
 )
 
 set(flutter_tts_bundled_libraries "" PARENT_SCOPE)

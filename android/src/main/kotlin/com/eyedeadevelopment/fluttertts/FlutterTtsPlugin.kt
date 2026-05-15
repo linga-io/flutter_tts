@@ -54,7 +54,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     private var ttsStatus: Int? = null
     private var selectedEngine: String? = null
     private var engineResult: Result? = null
-    private var parcelFileDescriptor: ParcelFileDescriptor? = null
+    private val synthParcelFileDescriptors = HashMap<String, ParcelFileDescriptor>()
     private var audioManager: AudioManager? = null
     private var audioFocusRequest: AudioFocusRequest? = null
 
@@ -85,6 +85,9 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         stop()
+        cancelPendingSpeakResult()
+        cancelPendingSynthResult()
+        closeAllParcelFileDescriptors(true)
         tts?.shutdown()
         context = null
         methodChannel?.setMethodCallHandler(null)
@@ -110,10 +113,12 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             override fun onDone(utteranceId: String) {
                 if (utteranceId.startsWith(SILENCE_PREFIX)) return
                 if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
-                    closeParcelFileDescriptor(false)
+                    closeParcelFileDescriptor(utteranceId, false)
                     Log.d(tag, "Utterance ID has completed: $utteranceId")
                     if (awaitSynthCompletion) {
                         synthCompletion(1)
+                    } else {
+                        synth = false
                     }
                     invokeMethod("synth.onComplete", true)
                 } else {
@@ -135,7 +140,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     "Utterance ID has been stopped: $utteranceId. Interrupted: $interrupted"
                 )
                 if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
-                    closeParcelFileDescriptor(true)
+                    closeParcelFileDescriptor(utteranceId, true)
                     if (awaitSynthCompletion) {
                         synthCompletion(0)
                     } else {
@@ -188,7 +193,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             @Deprecated("")
             override fun onError(utteranceId: String) {
                 if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
-                    closeParcelFileDescriptor(true)
+                    closeParcelFileDescriptor(utteranceId, true)
                     if (awaitSynthCompletion) {
                         synthCompletion(0)
                     } else {
@@ -208,7 +213,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
 
             override fun onError(utteranceId: String, errorCode: Int) {
                 if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
-                    closeParcelFileDescriptor(true)
+                    closeParcelFileDescriptor(utteranceId, true)
                     if (awaitSynthCompletion) {
                         synthCompletion(0)
                     } else {
@@ -240,6 +245,23 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         handler!!.post {
             synthResult?.success(success)
             synthResult = null
+        }
+    }
+
+    private fun cancelPendingSpeakResult() {
+        val result = speakResult ?: return
+        speakResult = null
+        handler?.post {
+            result.success(0)
+        }
+    }
+
+    private fun cancelPendingSynthResult() {
+        synth = false
+        val result = synthResult ?: return
+        synthResult = null
+        handler?.post {
+            result.success(0)
         }
     }
 
@@ -410,11 +432,12 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     )
                     return
                 }
+                synth = true
                 val synthesizeResult = synthesizeToFile(text, fileName, isFullPath)
                 if (synthesizeResult != TextToSpeech.SUCCESS) {
+                    synth = false
                     result.success(0)
                 } else if (awaitSynthCompletion) {
-                    synth = true
                     synthResult = result
                 } else {
                     result.success(1)
@@ -437,10 +460,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 stop()
                 lastProgress = 0
                 result.success(1)
-                if (speakResult != null) {
-                    speakResult!!.success(0)
-                    speakResult = null
-                }
+                cancelPendingSpeakResult()
             }
 
             "setEngine" -> {
@@ -512,6 +532,10 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     result.success(0)
                     return
                 }
+                if (silencems < 0) {
+                    result.success(0)
+                    return
+                }
                 this.silencems = silencems
                 result.success(1)
             }
@@ -534,6 +558,10 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             "setQueueMode" -> {
                 val queueMode = call.arguments.toString().toIntOrNull()
                 if (queueMode == null) {
+                    result.success(0)
+                    return
+                }
+                if (queueMode != TextToSpeech.QUEUE_FLUSH && queueMode != TextToSpeech.QUEUE_ADD) {
                     result.success(0)
                     return
                 }
@@ -799,7 +827,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     }
 
     private fun stop() {
-        if (awaitSynthCompletion) synth = false
+        synth = false
         if (awaitSpeakCompletion) speaking = false
         tts?.stop()
     }
@@ -807,28 +835,32 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     private val maxSpeechInputLength: Int
         get() = TextToSpeech.getMaxSpeechInputLength()
 
-    private fun closeParcelFileDescriptor(isError: Boolean)  {
-        if (this.parcelFileDescriptor != null)  {
-            try {
-                if (isError) {
-                    this.parcelFileDescriptor!!.closeWithError("Error synthesizing TTS to file")
-                } else {
-                    this.parcelFileDescriptor!!.close()
-                }
-            } catch (e: Exception) {
-                Log.e(tag, "Failed closing synthesize file descriptor: ${e.message}")
-            } finally {
-                this.parcelFileDescriptor = null
+    private fun closeParcelFileDescriptor(utteranceId: String, isError: Boolean) {
+        val parcelFileDescriptor = synthParcelFileDescriptors.remove(utteranceId) ?: return
+        try {
+            if (isError) {
+                parcelFileDescriptor.closeWithError("Error synthesizing TTS to file")
+            } else {
+                parcelFileDescriptor.close()
             }
+        } catch (e: Exception) {
+            Log.e(tag, "Failed closing synthesize file descriptor: ${e.message}")
+        }
+    }
+
+    private fun closeAllParcelFileDescriptors(isError: Boolean) {
+        for (utteranceId in synthParcelFileDescriptors.keys.toList()) {
+            closeParcelFileDescriptor(utteranceId, isError)
         }
     }
 
     private fun synthesizeToFile(text: String, fileName: String, isFullPath: Boolean): Int {
         val fullPath: String
         val uuid: String = UUID.randomUUID().toString()
+        val utteranceId = SYNTHESIZE_TO_FILE_PREFIX + uuid
         bundle!!.putString(
             TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID,
-            SYNTHESIZE_TO_FILE_PREFIX + uuid
+            utteranceId
         )
 
         val result: Int = try {
@@ -836,7 +868,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 val file = File(fileName)
                 fullPath = file.path
 
-                tts!!.synthesizeToFile(text, bundle!!, file, SYNTHESIZE_TO_FILE_PREFIX + uuid)
+                tts!!.synthesizeToFile(text, bundle!!, file, utteranceId)
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val resolver = this.context?.contentResolver
                 val contentValues = ContentValues().apply {
@@ -849,24 +881,25 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     Log.d(tag, "Failed creating MediaStore entry for file : $fileName")
                     return TextToSpeech.ERROR
                 }
-                this.parcelFileDescriptor = resolver.openFileDescriptor(uri, "rw")
+                val parcelFileDescriptor = resolver.openFileDescriptor(uri, "rw")
                 if (parcelFileDescriptor == null) {
                     Log.d(tag, "Failed opening file descriptor for file : $fileName")
                     return TextToSpeech.ERROR
                 }
+                synthParcelFileDescriptors[utteranceId] = parcelFileDescriptor
                 fullPath = uri?.path + File.separatorChar + fileName
 
-                tts!!.synthesizeToFile(text, bundle!!, parcelFileDescriptor!!, SYNTHESIZE_TO_FILE_PREFIX + uuid)
+                tts!!.synthesizeToFile(text, bundle!!, parcelFileDescriptor, utteranceId)
             } else {
                 val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
                 val file = File(musicDir, fileName)
                 fullPath = file.path
 
-                tts!!.synthesizeToFile(text, bundle!!, file, SYNTHESIZE_TO_FILE_PREFIX + uuid)
+                tts!!.synthesizeToFile(text, bundle!!, file, utteranceId)
             }
         } catch (e: Exception) {
             Log.d(tag, "Failed creating file : $fileName. ${e.message}")
-            closeParcelFileDescriptor(true)
+            closeParcelFileDescriptor(utteranceId, true)
             return TextToSpeech.ERROR
         }
 
@@ -874,7 +907,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             Log.d(tag, "Successfully created file : $fullPath")
         } else {
             Log.d(tag, "Failed creating file : $fullPath")
-            closeParcelFileDescriptor(true)
+            closeParcelFileDescriptor(utteranceId, true)
         }
         return result
     }

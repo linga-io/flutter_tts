@@ -20,7 +20,7 @@ A flutter text to speech plugin (Swift,Kotlin)
   - [x] is language available
 - [x] Android, iOS, Web
   - [x] speech marks (requires iOS 7+, Android 26+, and default voice engine for web)
-- [x] Android, iOS
+- [x] Android, iOS, macOS
   - [x] synthesize to file (requires iOS 13+)
 - [x] Android, iOS, Web, & Windows
   - [x] pause
@@ -178,7 +178,7 @@ await flutterTts.setPitch(1.0);
 
 await flutterTts.isLanguageAvailable("en-US");
 
-// iOS, Android and Web only
+// iOS, Android, Web, and Windows only
 //see the "Pausing on Android" section for more info
 await flutterTts.pause();
 
@@ -218,6 +218,10 @@ await flutterTts.getMaxSpeechInputLength;
 
 await flutterTts.setAudioAttributesForNavigation();
 ```
+
+## Windows
+
+Windows builds require `nuget.exe` on `PATH` so CMake can restore `Microsoft.Windows.CppWinRT`.
 
 ### Listening for platform calls
 

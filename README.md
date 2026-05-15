@@ -54,7 +54,7 @@ OSX version: 10.15
 
 **Progress updates on Web**
 
-Progress updates are only supported for native speech synsthesis. Use the default engine to ensure support for progress updates. [Chromium#41195426](https://issues.chromium.org/issues/41195426#comment8)
+Progress updates are only supported for native speech synthesis. Use the default engine to ensure support for progress updates. [Chromium#41195426](https://issues.chromium.org/issues/41195426#comment8)
 
 ## Android
 
@@ -66,15 +66,15 @@ minSdkVersion 21
 
 **Update the Kotlin Gradle Plugin Version**
 
-Change the verision of the Kotlin Gradle plugin to `1.9.10`. <br>
+Change the version of the Kotlin Gradle plugin to `2.2.20`. <br>
 If your project was created with a version of Flutter before 3.19, go to the `android/build.gradle` file and update the `ext.kotlin_version`:
 ```groovy
-ext.kotlin_version = '1.9.10'
+ext.kotlin_version = '2.2.20'
 ```
 
-Otherwise go to `android/settings.gradle` and update the verion of the plugin `org.jetbrains.kotlin.android`:
+Otherwise go to `android/settings.gradle` and update the version of the plugin `org.jetbrains.kotlin.android`:
 ```groovy
-id "org.jetbrains.kotlin.android" version "1.9.10" apply false
+id "org.jetbrains.kotlin.android" version "2.2.20" apply false
 ```
 
 
@@ -202,7 +202,7 @@ await flutterTts.setSharedInstance(true);
 // Android only
 await flutterTts.speak("Hello World", focus: true);
 
-await flutterTts.setSilence(2);
+await flutterTts.setSilence(2000);
 
 await flutterTts.getEngines;
 
@@ -246,14 +246,14 @@ flutterTts.setErrorHandler((msg) {
   });
 });
 
-flutterTts.setCancelHandler((msg) {
+flutterTts.setCancelHandler(() {
   setState(() {
     ttsState = TtsState.stopped;
   });
 });
 
 // Android, iOS and Web
-flutterTts.setPauseHandler((msg) {
+flutterTts.setPauseHandler(() {
   setState(() {
     ttsState = TtsState.paused;
   });

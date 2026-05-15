@@ -93,6 +93,7 @@ class FlutterTtsPlugin {
     utterance.onError = (JSObject event) {
       ttsState = TtsState.stopped;
       if (_speechCompleter != null) {
+        _speechCompleter?.completeError(event["error"] ?? event);
         _speechCompleter = null;
       }
       t?.cancel();
@@ -105,6 +106,7 @@ class FlutterTtsPlugin {
       String name = event['name'] as String;
       if (name == 'sentence') return;
       String text = utterance['text'] as String;
+      if (charIndex < 0 || charIndex >= text.length) return;
       int endIndex = charIndex;
       while (endIndex < text.length &&
           !RegExp(r'[\s,.!?]').hasMatch(text[endIndex])) {
@@ -129,11 +131,14 @@ class FlutterTtsPlugin {
         if (awaitSpeakCompletion) {
           _speechCompleter = Completer();
         }
-        _speak(text);
+        final didStart = _speak(text);
         if (awaitSpeakCompletion) {
+          if (!didStart) {
+            _speechCompleter?.complete(0);
+          }
           return _speechCompleter?.future;
         }
-        break;
+        return didStart ? 1 : 0;
       case 'awaitSpeakCompletion':
         awaitSpeakCompletion = (call.arguments as bool?) ?? false;
         return 1;
@@ -178,8 +183,8 @@ class FlutterTtsPlugin {
     }
   }
 
-  void _speak(String? text) {
-    if (text == null || text.isEmpty) return;
+  bool _speak(String? text) {
+    if (text == null || text.isEmpty) return false;
     if (ttsState == TtsState.stopped || ttsState == TtsState.paused) {
       utterance.text = text;
       if (ttsState == TtsState.paused) {
@@ -187,12 +192,18 @@ class FlutterTtsPlugin {
       } else {
         synth.speak(utterance);
       }
+      return true;
     }
+    return false;
   }
 
   void _stop() {
     if (ttsState != TtsState.stopped) {
       synth.cancel();
+    }
+    if (_speechCompleter != null) {
+      _speechCompleter?.complete(0);
+      _speechCompleter = null;
     }
   }
 

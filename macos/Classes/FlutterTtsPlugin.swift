@@ -147,18 +147,40 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
 
   private func synthesizeToFile(text: String, fileName: String, result: @escaping FlutterResult) {
     var output: AVAudioFile?
-    var failed = false
+    var completed = false
     let utterance = AVSpeechUtterance(string: text)
+    let shouldAwait = self.awaitSynthCompletion
 
-    if #available(iOS 13.0, *) {
+    if self.voice != nil {
+      utterance.voice = self.voice!
+    } else {
+      utterance.voice = AVSpeechSynthesisVoice(language: self.language)
+    }
+    utterance.rate = self.rate
+    utterance.volume = self.volume
+    utterance.pitchMultiplier = self.pitch
+
+    func complete(_ value: Int) {
+      if completed {
+        return
+      }
+      completed = true
+      if shouldAwait {
+        DispatchQueue.main.async {
+          result(value)
+        }
+      }
+    }
+
+    if #available(macOS 10.15, *) {
       self.synthesizer.write(utterance) { (buffer: AVAudioBuffer) in
         guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
             NSLog("unknow buffer type: \(buffer)")
-            failed = true
+            complete(0)
             return
         }
         if pcmBuffer.frameLength == 0 {
-            // finished
+            complete(1)
         } else {
           // append buffer to file
           let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent(fileName)
@@ -173,23 +195,24 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
               interleaved: false)
             } catch {
                 NSLog(error.localizedDescription)
-                failed = true
+                complete(0)
                 return
             }
           }
 
-          try! output!.write(from: pcmBuffer)
+          do {
+            try output!.write(from: pcmBuffer)
+          } catch {
+            NSLog("Error writing AVAudioFile: \(error.localizedDescription)")
+            complete(0)
+          }
         }
       }
     } else {
-        result("Unsupported iOS version")
-    }
-    if failed {
         result(0)
+        return
     }
-    if self.awaitSynthCompletion {
-      self.synthResult = result
-    } else {
+    if !shouldAwait {
       result(1)
     }
   }
@@ -226,7 +249,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   }
 
   private func setPitch(pitch: Float, result: FlutterResult) {
-    if (volume >= 0.5 && volume <= 2.0) {
+    if (pitch >= 0.5 && pitch <= 2.0) {
       self.pitch = pitch
       result(1)
     } else {
@@ -369,6 +392,10 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    if self.awaitSpeakCompletion && self.speakResult != nil {
+      self.speakResult!(0)
+      self.speakResult = nil
+    }
     self.channel.invokeMethod("speak.onCancel", arguments: nil)
   }
 
@@ -394,6 +421,8 @@ extension AVSpeechSynthesisVoiceQuality {
             return "premium"
         case .enhanced:
             return "enhanced"
+        @unknown default:
+            return "unknown"
         }
     }
 }
@@ -408,6 +437,8 @@ extension AVSpeechSynthesisVoiceGender {
             return "female"
         case .unspecified:
             return "unspecified"
+        @unknown default:
+            return "unknown"
         }
     }
 }

@@ -81,8 +81,9 @@ namespace {
 				Windows::Foundation::IInspectable const& args)
 				{
 				    methodChannel->InvokeMethod("speak.onComplete", NULL);
-				    if (awaitSpeakCompletion) {
+				    if (awaitSpeakCompletion && speakResult) {
                         speakResult->Success(1);
+						speakResult = FlutterResult();
                     }
 					isSpeaking = false;
 				});
@@ -129,8 +130,9 @@ namespace {
 
 	void FlutterTtsPlugin::stop() {
 	    methodChannel->InvokeMethod("speak.onCancel", NULL);
-        if (awaitSpeakCompletion) {
-            speakResult->Success(1);
+        if (awaitSpeakCompletion && speakResult) {
+            speakResult->Success(0);
+			speakResult = FlutterResult();
         }
 
 		mPlayer.Close();
@@ -206,12 +208,18 @@ namespace {
 		VoiceInformation newVoice = synth.Voice();
 		std::for_each(begin(voices), end(voices), [&voiceLanguage, &newVoice, &found](const VoiceInformation& voice)
 			{
-				if (to_string(voice.Language()) == voiceLanguage) newVoice = voice;
-				found = true;
+				if (to_string(voice.Language()) == voiceLanguage) {
+					newVoice = voice;
+					found = true;
+				}
 			});
-		synth.Voice(newVoice);
-		if (found) result->Success(1);
-		else result->Success(0);
+		if (found) {
+			synth.Voice(newVoice);
+			result->Success(1);
+		}
+		else {
+			result->Success(0);
+		}
 	}
 
 
@@ -267,10 +275,13 @@ namespace {
 		void setVoice(const std::string, const std::string, FlutterResult&);
 		void getLanguages(flutter::EncodableList&);
 		void setLanguage(const std::string, FlutterResult&);
+		void onSpeakComplete();
+		void completePendingSpeak(const int);
 
 		ISpVoice* pVoice;
 		bool awaitSpeakCompletion = false;
 		bool isPaused;
+		bool suppressNextCompletion;
 		double pitch;
 		bool speaking();
 		bool paused();
@@ -296,6 +307,7 @@ namespace {
 	FlutterTtsPlugin::FlutterTtsPlugin() {
 		addWaitHandle = NULL;
 		isPaused = false;
+		suppressNextCompletion = false;
 		speakResult = NULL;
 		pVoice = NULL;
 		HRESULT hr;
@@ -317,16 +329,55 @@ namespace {
 		::CoUninitialize();
 	}
 
-    void CALLBACK setResult(PVOID lpParam, BOOLEAN TimerOrWaitFired)
-    {
-        flutter::MethodResult<flutter::EncodableValue>* p = (flutter::MethodResult<flutter::EncodableValue>*) lpParam;
-        p->Success(1);
-    }
-
     void CALLBACK onCompletion(PVOID lpParam, BOOLEAN TimerOrWaitFired)
     {
-        methodChannel->InvokeMethod("speak.onComplete", NULL);
+        FlutterTtsPlugin* plugin = static_cast<FlutterTtsPlugin*>(lpParam);
+        plugin->onSpeakComplete();
     }
+
+	std::string escapeSapiXml(const std::string& text) {
+		std::string escaped;
+		escaped.reserve(text.size());
+		for (char c : text) {
+			switch (c) {
+				case '&':
+					escaped.append("&amp;");
+					break;
+				case '<':
+					escaped.append("&lt;");
+					break;
+				case '>':
+					escaped.append("&gt;");
+					break;
+				case '"':
+					escaped.append("&quot;");
+					break;
+				case '\'':
+					escaped.append("&apos;");
+					break;
+				default:
+					escaped.push_back(c);
+					break;
+			}
+		}
+		return escaped;
+	}
+
+	void FlutterTtsPlugin::completePendingSpeak(const int success) {
+		if (awaitSpeakCompletion && speakResult) {
+			speakResult->Success(success);
+			speakResult = NULL;
+		}
+	}
+
+	void FlutterTtsPlugin::onSpeakComplete() {
+		if (suppressNextCompletion) {
+			suppressNextCompletion = false;
+			return;
+		}
+		methodChannel->InvokeMethod("speak.onComplete", NULL);
+		completePendingSpeak(1);
+	}
 
 	bool FlutterTtsPlugin::speaking()
 	{
@@ -340,7 +391,7 @@ namespace {
 
 	void FlutterTtsPlugin::speak(const std::string text, FlutterResult result) {
 		HRESULT hr;
-		const std::string arg = "<PITCH MIDDLE = '" + std::to_string(int((pitch - 1) * 10 * (1 + (pitch < 1)) )) + "'/>" + text;
+		const std::string arg = "<PITCH MIDDLE = '" + std::to_string(int((pitch - 1) * 10 * (1 + (pitch < 1)) )) + "'/>" + escapeSapiXml(text);
 
 		int wchars_num = MultiByteToWideChar(CP_UTF8, 0, arg.c_str(), -1, NULL, 0);
 		wchar_t* wstr = new wchar_t[wchars_num];
@@ -349,12 +400,11 @@ namespace {
 		delete[] wstr;
 		HANDLE speakCompletionHandle = pVoice->SpeakCompleteEvent();
 		methodChannel->InvokeMethod("speak.onStart", NULL);
-		RegisterWaitForSingleObject(&addWaitHandle, speakCompletionHandle, (WAITORTIMERCALLBACK)&onCompletion, speakResult.get(), INFINITE, WT_EXECUTEONLYONCE);
 		if (awaitSpeakCompletion){
 		    speakResult = std::move(result);
-		    RegisterWaitForSingleObject(&addWaitHandle, speakCompletionHandle, (WAITORTIMERCALLBACK)&setResult, speakResult.get(), INFINITE, WT_EXECUTEONLYONCE);
 		}
 		else result->Success(1);
+		RegisterWaitForSingleObject(&addWaitHandle, speakCompletionHandle, (WAITORTIMERCALLBACK)&onCompletion, this, INFINITE, WT_EXECUTEONLYONCE);
 	}
 	void FlutterTtsPlugin::pause()
 	{
@@ -373,6 +423,8 @@ namespace {
 	}
 	void FlutterTtsPlugin::stop()
 	{
+		suppressNextCompletion = true;
+		completePendingSpeak(0);
 		pVoice->Speak(L"", 2, NULL);
 		pVoice->Resume();
 		isPaused = false;

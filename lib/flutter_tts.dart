@@ -328,6 +328,8 @@ class SpeechRateValidRange {
 // Provides Platform specific TTS services (Android: TextToSpeech, IOS: AVSpeechSynthesizer)
 class FlutterTts {
   static const MethodChannel _channel = MethodChannel('flutter_tts');
+  static FlutterTts? _activeInstance;
+  static bool _platformCallHandlerInstalled = false;
 
   VoidCallback? startHandler;
   VoidCallback? completionHandler;
@@ -338,7 +340,25 @@ class FlutterTts {
   ErrorHandler? errorHandler;
 
   FlutterTts() {
-    _channel.setMethodCallHandler(platformCallHandler);
+    _ensurePlatformCallHandlerInstalled();
+    _activeInstance ??= this;
+  }
+
+  static void _ensurePlatformCallHandlerInstalled() {
+    if (_platformCallHandlerInstalled) {
+      return;
+    }
+    _channel.setMethodCallHandler(_platformCallHandler);
+    _platformCallHandlerInstalled = true;
+  }
+
+  static Future<dynamic> _platformCallHandler(MethodCall call) async {
+    return _activeInstance?.platformCallHandler(call);
+  }
+
+  void _activatePlatformCallHandler() {
+    _ensurePlatformCallHandlerInstalled();
+    _activeInstance = this;
   }
 
   /// [Future] which sets speak's future to return on completion of the utterance
@@ -352,6 +372,7 @@ class FlutterTts {
 
   /// [Future] which invokes the platform specific method for speaking
   Future<dynamic> speak(String text, {bool focus = false}) async {
+    _activatePlatformCallHandler();
     if (!kIsWeb && Platform.isAndroid) {
       return await _channel.invokeMethod('speak', <String, dynamic>{
         "text": text,
@@ -363,7 +384,10 @@ class FlutterTts {
   }
 
   /// [Future] which invokes the platform specific method for pause
-  Future<dynamic> pause() async => await _channel.invokeMethod('pause');
+  Future<dynamic> pause() async {
+    _activatePlatformCallHandler();
+    return await _channel.invokeMethod('pause');
+  }
 
   /// [Future] which invokes the platform specific method for getMaxSpeechInputLength
   /// ***Android supported only***
@@ -374,12 +398,14 @@ class FlutterTts {
   /// [Future] which invokes the platform specific method for synthesizeToFile
   /// ***Android and iOS supported only***
   Future<dynamic> synthesizeToFile(String text, String fileName,
-          [bool isFullPath = false]) async =>
-      _channel.invokeMethod('synthesizeToFile', <String, dynamic>{
-        "text": text,
-        "fileName": fileName,
-        "isFullPath": isFullPath,
-      });
+      [bool isFullPath = false]) async {
+    _activatePlatformCallHandler();
+    return _channel.invokeMethod('synthesizeToFile', <String, dynamic>{
+      "text": text,
+      "fileName": fileName,
+      "isFullPath": isFullPath,
+    });
+  }
 
   /// [Future] which invokes the platform specific method for setLanguage
   Future<dynamic> setLanguage(String language) async =>
@@ -482,7 +508,10 @@ class FlutterTts {
       await _channel.invokeMethod('clearVoice');
 
   /// [Future] which invokes the platform specific method for stop
-  Future<dynamic> stop() async => await _channel.invokeMethod('stop');
+  Future<dynamic> stop() async {
+    _activatePlatformCallHandler();
+    return await _channel.invokeMethod('stop');
+  }
 
   /// [Future] which invokes the platform specific method for getLanguages
   /// Android issues with API 21 & 22

@@ -169,8 +169,9 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
 
   private func synthesizeToFile(text: String, fileName: String, isFullPath: Bool, result: @escaping FlutterResult) {
     var output: AVAudioFile?
-    var failed = false
+    var completed = false
     let utterance = AVSpeechUtterance(string: text)
+    let shouldAwait = self.awaitSynthCompletion
 
     if self.voice != nil {
       utterance.voice = self.voice!
@@ -181,16 +182,27 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
     utterance.volume = self.volume
     utterance.pitchMultiplier = self.pitch
 
+    func complete(_ value: Int) {
+      if completed {
+        return
+      }
+      completed = true
+      if shouldAwait {
+        DispatchQueue.main.async {
+          result(value)
+        }
+      }
+    }
+
     if #available(iOS 13.0, *) {
       self.synthesizer.write(utterance) { (buffer: AVAudioBuffer) in
         guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
             NSLog("unknow buffer type: \(buffer)")
-            failed = true
+            complete(0)
             return
         }
-        print(pcmBuffer.format)
         if pcmBuffer.frameLength == 0 {
-            // finished
+            complete(1)
         } else {
           // append buffer to file
           let fileURL: URL
@@ -204,9 +216,9 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
         if output == nil {
           do {
             if #available(iOS 17.0, *) {
-                guard let audioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: pcmBuffer.format.sampleRate, channels: 1, interleaved: false) else {
+                guard let audioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: pcmBuffer.format.sampleRate, channels: pcmBuffer.format.channelCount, interleaved: false) else {
                 NSLog("Error creating audio format for iOS 17+")
-                failed = true
+                complete(0)
                 return
               }
               output = try AVAudioFile(forWriting: fileURL, settings: audioFormat.settings)
@@ -215,24 +227,25 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
             }
           } catch {
               NSLog("Error creating AVAudioFile: \(error.localizedDescription)")
-              failed = true
+              complete(0)
               return
           }
         }
 
 
-          try! output!.write(from: pcmBuffer)
+          do {
+            try output!.write(from: pcmBuffer)
+          } catch {
+            NSLog("Error writing AVAudioFile: \(error.localizedDescription)")
+            complete(0)
+          }
         }
       }
     } else {
-        result("Unsupported iOS version")
-    }
-    if failed {
         result(0)
+        return
     }
-    if self.awaitSynthCompletion {
-      self.synthResult = result
-    } else {
+    if !shouldAwait {
       result(1)
     }
   }
@@ -269,7 +282,7 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
   }
 
   private func setPitch(pitch: Float, result: FlutterResult) {
-    if (volume >= 0.5 && volume <= 2.0) {
+    if (pitch >= 0.5 && pitch <= 2.0) {
       self.pitch = pitch
       result(1)
     } else {
@@ -462,6 +475,10 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    if self.awaitSpeakCompletion && self.speakResult != nil {
+      self.speakResult!(0)
+      self.speakResult = nil
+    }
     self.channel.invokeMethod("speak.onCancel", arguments: nil)
   }
 
@@ -487,6 +504,8 @@ extension AVSpeechSynthesisVoiceQuality {
             return "premium"
         case .enhanced:
             return "enhanced"
+        @unknown default:
+            return "unknown"
         }
     }
 }
@@ -501,6 +520,8 @@ extension AVSpeechSynthesisVoiceGender {
             return "female"
         case .unspecified:
             return "unspecified"
+        @unknown default:
+            return "unknown"
         }
     }
 }

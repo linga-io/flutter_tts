@@ -499,7 +499,9 @@ class FlutterTts {
       IosTextToSpeechAudioMode.voiceChat: iosAudioModeVoiceChat,
       IosTextToSpeechAudioMode.voicePrompt: iosAudioModeVoicePrompt,
     };
-    if (!_isIOS) return;
+    if (!_isIOS) {
+      _throwUnsupported('setIosAudioCategory', 'iOS');
+    }
     try {
       return await _channel
           .invokeMethod<dynamic>('setIosAudioCategory', <String, dynamic>{
@@ -529,7 +531,7 @@ class FlutterTts {
       await _channel.invokeMethod('setPitch', pitch);
 
   /// [Future] which invokes the platform specific method for setVoice
-  /// ***Android, iOS, and macOS supported only***
+  /// ***Android, iOS, macOS, Windows, and Web supported only***
   Future<dynamic> setVoice(Map<String, String> voice) async =>
       await _channel.invokeMethod('setVoice', voice);
 
@@ -591,7 +593,7 @@ class FlutterTts {
   /// [Future] which invokes the platform specific method for getVoices
   /// Returns a `List` of `Maps` containing a voice name and locale
   /// For iOS specifically, it also includes quality, gender, and identifier
-  /// ***Android, iOS, and macOS supported only***
+  /// ***Android, iOS, macOS, Windows, and Web supported only***
   Future<dynamic> get getVoices async {
     final voices = await _channel.invokeMethod('getVoices');
     return voices;

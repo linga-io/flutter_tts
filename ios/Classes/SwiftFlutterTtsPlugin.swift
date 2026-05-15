@@ -579,11 +579,12 @@ extension AVSpeechSynthesisVoiceQuality {
         switch self {
         case .default:
             return "default"
-        case .premium:
-            return "premium"
         case .enhanced:
             return "enhanced"
-        @unknown default:
+        default:
+            if #available(iOS 16.0, *), self == .premium {
+                return "premium"
+            }
             return "unknown"
         }
     }

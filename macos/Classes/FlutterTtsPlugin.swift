@@ -74,7 +74,8 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
         result(FlutterError(code: "InvalidArgument", message: "synthesizeToFile requires text and fileName arguments", details: nil))
         return
       }
-      self.synthesizeToFile(text: text, fileName: fileName, result: result)
+      let isFullPath = args["isFullPath"] as? Bool ?? false
+      self.synthesizeToFile(text: text, fileName: fileName, isFullPath: isFullPath, result: result)
       break
     case "pause":
       self.pause(result: result)
@@ -183,7 +184,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
     }
   }
 
-  private func synthesizeToFile(text: String, fileName: String, result: @escaping FlutterResult) {
+  private func synthesizeToFile(text: String, fileName: String, isFullPath: Bool, result: @escaping FlutterResult) {
     var output: AVAudioFile?
     var completed = false
     let utterance = AVSpeechUtterance(string: text)
@@ -232,7 +233,12 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
             complete(1)
         } else {
           // append buffer to file
-          let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent(fileName)
+          let fileURL: URL
+          if isFullPath {
+            fileURL = URL(fileURLWithPath: fileName)
+          } else {
+            fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.appendingPathComponent(fileName)
+          }
           NSLog("Saving utterance to file: \(fileURL.absoluteString)")
 
           if output == nil {
@@ -489,11 +495,12 @@ extension AVSpeechSynthesisVoiceQuality {
         switch self {
         case .default:
             return "default"
-        case .premium:
-            return "premium"
         case .enhanced:
             return "enhanced"
-        @unknown default:
+        default:
+            if #available(macOS 13.0, *), self == .premium {
+                return "premium"
+            }
             return "unknown"
         }
     }

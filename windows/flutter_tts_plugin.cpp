@@ -48,6 +48,7 @@ namespace {
 		void setVoice(const std::string, const std::string, FlutterResult&);
 		void getLanguages(flutter::EncodableList&);
 		void setLanguage(const std::string, FlutterResult&);
+		bool isLanguageAvailable(const std::string);
 		void addMplayer();
 		void onSpeakComplete();
 		void postSpeakComplete();
@@ -250,6 +251,16 @@ namespace {
 		}
 	}
 
+	bool FlutterTtsPlugin::isLanguageAvailable(const std::string voiceLanguage) {
+		auto voices = synth.AllVoices();
+		for (const VoiceInformation& voice : voices) {
+			if (to_string(voice.Language()) == voiceLanguage) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 
 	FlutterTtsPlugin::FlutterTtsPlugin(flutter::PluginRegistrarWindows* registrar) : registrar(registrar) {
 		synth = SpeechSynthesizer();
@@ -312,6 +323,7 @@ namespace {
 		void setVoice(const std::string, const std::string, FlutterResult&);
 		void getLanguages(flutter::EncodableList&);
 		void setLanguage(const std::string, FlutterResult&);
+		bool isLanguageAvailable(const std::string);
 		void onSpeakComplete();
 		void completePendingSpeak(const int);
 		void postSpeakComplete();
@@ -479,6 +491,11 @@ namespace {
 		MultiByteToWideChar(CP_UTF8, 0, arg.c_str(), -1, wstr, wchars_num);
 		hr = pVoice->Speak(wstr, 1, NULL);
 		delete[] wstr;
+		if (FAILED(hr)) {
+			methodChannel->InvokeMethod("speak.onError", std::make_unique<flutter::EncodableValue>("Error from SAPI TextToSpeech"));
+			result->Success(0);
+			return;
+		}
 		HANDLE speakCompletionHandle = pVoice->SpeakCompleteEvent();
 		methodChannel->InvokeMethod("speak.onStart", NULL);
 		if (awaitSpeakCompletion){
@@ -666,6 +683,38 @@ namespace {
 		else result->Success(0);
 	}
 
+	bool FlutterTtsPlugin::isLanguageAvailable(const std::string voiceLanguage) {
+		HRESULT hr;
+		CComPtr<IEnumSpObjectTokens> cpEnum;
+		hr = SpEnumTokens(SPCAT_VOICES, NULL, NULL, &cpEnum);
+		if (FAILED(hr)) return false;
+		ULONG ulCount = 0;
+		hr = cpEnum->GetCount(&ulCount);
+		if (FAILED(hr)) return false;
+		while (ulCount--)
+		{
+			CComPtr<ISpObjectToken> cpVoiceToken;
+			hr = cpEnum->Next(1, &cpVoiceToken, NULL);
+			if (FAILED(hr)) return false;
+			CComPtr<ISpDataKey> cpAttribKey;
+			hr = cpVoiceToken->OpenKey(L"Attributes", &cpAttribKey);
+			if (FAILED(hr)) return false;
+
+			WCHAR* psz = NULL;
+			hr = cpAttribKey->GetStringValue(L"Language", &psz);
+			if (FAILED(hr)) return false;
+		    wchar_t locale[25];
+            LCIDToLocaleName((LCID)std::strtol(CW2A(psz), NULL, 16), locale, 25, 0);
+            std::string language = CW2A(locale);
+			::CoTaskMemFree(psz);
+			if (language == voiceLanguage)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
 
 	void FlutterTtsPlugin::HandleMethodCall(
 		const flutter::MethodCall<flutter::EncodableValue>& method_call,
@@ -717,6 +766,14 @@ namespace {
 				setLanguage(lang, result);
 			}
 			else result->Success(0);
+		}
+		else if (method_call.method_name().compare("isLanguageAvailable") == 0) {
+			const flutter::EncodableValue arg = method_call.arguments()[0];
+			if (std::holds_alternative<std::string>(arg)) {
+				const std::string lang = std::get<std::string>(arg);
+				result->Success(isLanguageAvailable(lang));
+			}
+			else result->Success(false);
 		}
 		else if (method_call.method_name().compare("setVolume") == 0) {
 			const flutter::EncodableValue arg = method_call.arguments()[0];

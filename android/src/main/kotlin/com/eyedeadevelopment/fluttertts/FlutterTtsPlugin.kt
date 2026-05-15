@@ -345,7 +345,11 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                         // Only use await speak completion if queueMode is set to QUEUE_FLUSH
                         if (awaitSpeakCompletion && queueMode == TextToSpeech.QUEUE_FLUSH) {
                             speaking = true
-                            speakResult = result
+                            if (speakResult == null) {
+                                speakResult = result
+                            } else {
+                                result.success(1)
+                            }
                         } else {
                             result.success(1)
                         }
@@ -412,10 +416,6 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 }
                 stop()
                 result.success(1)
-                if (speakResult != null) {
-                    speakResult!!.success(0)
-                    speakResult = null
-                }
             }
 
             "stop" -> {

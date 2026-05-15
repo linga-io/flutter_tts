@@ -521,12 +521,15 @@ namespace {
 	}
 	void FlutterTtsPlugin::stop()
 	{
-		suppressNextCompletion = true;
+		const bool hadActiveSpeech = speaking() || isPaused || addWaitHandle != NULL || speakResult != NULL;
+		suppressNextCompletion = hadActiveSpeech && addWaitHandle != NULL;
 		completePendingSpeak(0);
 		pVoice->Speak(L"", 2, NULL);
 		pVoice->Resume();
 		isPaused = false;
-	    methodChannel->InvokeMethod("speak.onCancel", NULL);
+		if (hadActiveSpeech) {
+		    methodChannel->InvokeMethod("speak.onCancel", NULL);
+		}
 	}
 	void FlutterTtsPlugin::setVolume(const double newVolume)
 	{
@@ -779,6 +782,10 @@ namespace {
 			const flutter::EncodableValue arg = method_call.arguments()[0];
 			if (std::holds_alternative<double>(arg)) {
 				const double newVolume = std::get<double>(arg);
+				if (newVolume < 0.0 || newVolume > 1.0) {
+					result->Success(0);
+					return;
+				}
 				setVolume(newVolume);
 				result->Success(1);
 			}
@@ -789,6 +796,10 @@ namespace {
 			const flutter::EncodableValue arg = method_call.arguments()[0];
 			if (std::holds_alternative<double>(arg)) {
 				const double newRate = std::get<double>(arg);
+				if (newRate < 0.0 || newRate > 1.0) {
+					result->Success(0);
+					return;
+				}
 				setRate(newRate);
 				result->Success(1);
 			}
@@ -799,6 +810,10 @@ namespace {
             const flutter::EncodableValue arg = method_call.arguments()[0];
             if (std::holds_alternative<double>(arg)) {
                 const double newPitch = std::get<double>(arg);
+                if (newPitch < 0.5 || newPitch > 2.0) {
+                    result->Success(0);
+                    return;
+                }
                 setPitch(newPitch);
                 result->Success(1);
             }

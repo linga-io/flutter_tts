@@ -134,6 +134,18 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     tag,
                     "Utterance ID has been stopped: $utteranceId. Interrupted: $interrupted"
                 )
+                if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
+                    closeParcelFileDescriptor(true)
+                    if (awaitSynthCompletion) {
+                        synthCompletion(0)
+                    } else {
+                        synth = false
+                    }
+                    invokeMethod("synth.onError", "Synthesize to file was stopped")
+                    utterances.remove(utteranceId)
+                    releaseAudioFocus()
+                    return
+                }
                 if (awaitSpeakCompletion) {
                     speaking = false
                 }
@@ -227,30 +239,40 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         }
     }
 
+    private fun drainPendingMethodCalls() {
+        val pendingCalls = synchronized(this@FlutterTtsPlugin) {
+            val calls = pendingMethodCalls.toList()
+            pendingMethodCalls.clear()
+            calls
+        }
+        for (call in pendingCalls) {
+            call.run()
+        }
+    }
+
+    private fun configureSuccessfulTts() {
+        val textToSpeech = tts ?: return
+        textToSpeech.setOnUtteranceProgressListener(utteranceProgressListener)
+        try {
+            val locale: Locale = textToSpeech.defaultVoice.locale
+            if (isLanguageAvailable(locale)) {
+                textToSpeech.language = locale
+            }
+        } catch (e: NullPointerException) {
+            Log.e(tag, "getDefaultLocale: " + e.message)
+        } catch (e: IllegalArgumentException) {
+            Log.e(tag, "getDefaultLocale: " + e.message)
+        }
+    }
+
     private val onInitListenerWithCallback: TextToSpeech.OnInitListener =
         TextToSpeech.OnInitListener { status ->
-            // Handle pending method calls (sent while TTS was initializing)
             synchronized(this@FlutterTtsPlugin) {
                 ttsStatus = status
-                for (call in pendingMethodCalls) {
-                    call.run()
-                }
-                pendingMethodCalls.clear()
             }
 
             if (status == TextToSpeech.SUCCESS) {
-                tts!!.setOnUtteranceProgressListener(utteranceProgressListener)
-                try {
-                    val locale: Locale = tts!!.defaultVoice.locale
-                    if (isLanguageAvailable(locale)) {
-                        tts!!.language = locale
-                    }
-                } catch (e: NullPointerException) {
-                    Log.e(tag, "getDefaultLocale: " + e.message)
-                } catch (e: IllegalArgumentException) {
-                    Log.e(tag, "getDefaultLocale: " + e.message)
-                }
-
+                configureSuccessfulTts()
                 engineResult?.let {
                     try {
                         it.success(1)
@@ -266,34 +288,21 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 )
             }
             engineResult = null
+            drainPendingMethodCalls()
         }
 
     private val onInitListenerWithoutCallback: TextToSpeech.OnInitListener =
         TextToSpeech.OnInitListener { status ->
-            // Handle pending method calls (sent while TTS was initializing)
             synchronized(this@FlutterTtsPlugin) {
                 ttsStatus = status
-                for (call in pendingMethodCalls) {
-                    call.run()
-                }
-                pendingMethodCalls.clear()
             }
 
             if (status == TextToSpeech.SUCCESS) {
-                tts!!.setOnUtteranceProgressListener(utteranceProgressListener)
-                try {
-                    val locale: Locale = tts!!.defaultVoice.locale
-                    if (isLanguageAvailable(locale)) {
-                        tts!!.language = locale
-                    }
-                } catch (e: NullPointerException) {
-                    Log.e(tag, "getDefaultLocale: " + e.message)
-                } catch (e: IllegalArgumentException) {
-                    Log.e(tag, "getDefaultLocale: " + e.message)
-                }
+                configureSuccessfulTts()
             } else {
                 Log.e(tag, "Failed to initialize TextToSpeech with status: $status")
             }
+            drainPendingMethodCalls()
         }
 
     override fun onMethodCall(call: MethodCall, result: Result) {

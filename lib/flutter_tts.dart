@@ -361,6 +361,17 @@ class FlutterTts {
     _activeInstance = this;
   }
 
+  Future<dynamic> _invokeSpeechOperation(
+      String method, dynamic arguments) async {
+    final previousInstance = _activeInstance;
+    _activatePlatformCallHandler();
+    final result = await _channel.invokeMethod(method, arguments);
+    if (result == 0 && previousInstance != null && previousInstance != this) {
+      _activeInstance = previousInstance;
+    }
+    return result;
+  }
+
   static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
   static bool get _isIOS => !kIsWeb && Platform.isIOS;
   static bool get _isMacOS => !kIsWeb && Platform.isMacOS;
@@ -385,20 +396,18 @@ class FlutterTts {
 
   /// [Future] which invokes the platform specific method for speaking
   Future<dynamic> speak(String text, {bool focus = false}) async {
-    _activatePlatformCallHandler();
     if (_isAndroid) {
-      return await _channel.invokeMethod('speak', <String, dynamic>{
+      return await _invokeSpeechOperation('speak', <String, dynamic>{
         "text": text,
         "focus": focus,
       });
     } else {
-      return await _channel.invokeMethod('speak', text);
+      return await _invokeSpeechOperation('speak', text);
     }
   }
 
   /// [Future] which invokes the platform specific method for pause
   Future<dynamic> pause() async {
-    _activatePlatformCallHandler();
     return await _channel.invokeMethod('pause');
   }
 
@@ -418,8 +427,7 @@ class FlutterTts {
     if (!_isAndroid && !_isIOS && !_isMacOS) {
       _throwUnsupported('synthesizeToFile', 'Android, iOS, and macOS');
     }
-    _activatePlatformCallHandler();
-    return _channel.invokeMethod('synthesizeToFile', <String, dynamic>{
+    return _invokeSpeechOperation('synthesizeToFile', <String, dynamic>{
       "text": text,
       "fileName": fileName,
       "isFullPath": isFullPath,
@@ -545,7 +553,6 @@ class FlutterTts {
 
   /// [Future] which invokes the platform specific method for stop
   Future<dynamic> stop() async {
-    _activatePlatformCallHandler();
     return await _channel.invokeMethod('stop');
   }
 

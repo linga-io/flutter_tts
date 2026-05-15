@@ -207,6 +207,8 @@ class FlutterTtsPlugin {
     if (ttsState != TtsState.stopped) {
       synth.cancel();
     }
+    ttsState = TtsState.stopped;
+    t?.cancel();
     if (_speechCompleter != null) {
       _speechCompleter?.complete(0);
       _speechCompleter = null;

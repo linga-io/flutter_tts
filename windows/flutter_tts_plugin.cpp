@@ -14,7 +14,6 @@
 typedef std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> FlutterResult;
 //typedef flutter::MethodResult<flutter::EncodableValue>* PFlutterResult;
 
-std::unique_ptr<flutter::MethodChannel<>> methodChannel;
 constexpr UINT kFlutterTtsSpeakCompleteMessage = WM_APP + 0x3D7;
 
 #if defined(WINAPI_FAMILY) && (WINAPI_FAMILY == WINAPI_FAMILY_DESKTOP_APP)
@@ -62,6 +61,7 @@ namespace {
 		bool isSpeaking;
 		bool awaitSpeakCompletion;
 		FlutterResult speakResult;
+		std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> methodChannel;
 		flutter::PluginRegistrarWindows* registrar;
 		HWND windowHandle;
 		int windowProcId;
@@ -69,13 +69,13 @@ namespace {
 
 	void FlutterTtsPlugin::RegisterWithRegistrar(
 		flutter::PluginRegistrarWindows* registrar) {
-		methodChannel =
+		auto plugin = std::make_unique<FlutterTtsPlugin>(registrar);
+		plugin->methodChannel =
 			std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
 				registrar->messenger(), "flutter_tts",
 				&flutter::StandardMethodCodec::GetInstance());
-		auto plugin = std::make_unique<FlutterTtsPlugin>(registrar);
 
-		methodChannel->SetMethodCallHandler(
+		plugin->methodChannel->SetMethodCallHandler(
 			[plugin_pointer = plugin.get()](const auto& call, auto result) {
 			plugin_pointer->HandleMethodCall(call, std::move(result));
 		});
@@ -281,6 +281,7 @@ namespace {
 
 #else
 #include <string>
+#include <atlbase.h>
 #include <atlstr.h>
 #include <array>
 #include <sapi.h>
@@ -324,6 +325,7 @@ namespace {
 		bool speaking();
 		bool paused();
 		FlutterResult speakResult;
+		std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> methodChannel;
     	HANDLE addWaitHandle;
 		flutter::PluginRegistrarWindows* registrar;
 		HWND windowHandle;
@@ -332,12 +334,12 @@ namespace {
 
 	void FlutterTtsPlugin::RegisterWithRegistrar(
 		flutter::PluginRegistrarWindows* registrar) {
-		methodChannel =
+		auto plugin = std::make_unique<FlutterTtsPlugin>(registrar);
+		plugin->methodChannel =
 			std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
 				registrar->messenger(), "flutter_tts",
 				&flutter::StandardMethodCodec::GetInstance());
-		auto plugin = std::make_unique<FlutterTtsPlugin>(registrar);
-		methodChannel->SetMethodCallHandler(
+		plugin->methodChannel->SetMethodCallHandler(
 			[plugin_pointer = plugin.get()](const auto& call, auto result) {
 			plugin_pointer->HandleMethodCall(call, std::move(result));
 		});
@@ -522,7 +524,7 @@ namespace {
 	}
 	void FlutterTtsPlugin::getVoices(flutter::EncodableList& voices) {
 		HRESULT hr;
-		IEnumSpObjectTokens* cpEnum = NULL;
+		CComPtr<IEnumSpObjectTokens> cpEnum;
 		hr = SpEnumTokens(SPCAT_VOICES, NULL, NULL, &cpEnum);
 		if (FAILED(hr)) return;
 
@@ -530,10 +532,9 @@ namespace {
 		// Get the number of voices.
 		hr = cpEnum->GetCount(&ulCount);
 		if (FAILED(hr)) return;
-		ISpObjectToken* cpVoiceToken = NULL;
 		while (ulCount--)
 		{
-			cpVoiceToken = NULL;
+			CComPtr<ISpObjectToken> cpVoiceToken;
 			hr = cpEnum->Next(1, &cpVoiceToken, NULL);
 			if (FAILED(hr)) return;
 			CComPtr<ISpDataKey> cpAttribKey;
@@ -541,34 +542,34 @@ namespace {
 			if (FAILED(hr)) return;
 			WCHAR* psz = NULL;
 			hr = cpAttribKey->GetStringValue(L"Language", &psz);
+			if (FAILED(hr)) return;
 		    wchar_t locale[25];
             LCIDToLocaleName((LCID)std::strtol(CW2A(psz), NULL, 16), locale, 25, 0);
             ::CoTaskMemFree(psz);
             std::string language = CW2A(locale);
             psz = NULL;
-            cpAttribKey->GetStringValue(L"Name", &psz);
+            hr = cpAttribKey->GetStringValue(L"Name", &psz);
+			if (FAILED(hr)) return;
 			std::string name = CW2A(psz);
 			::CoTaskMemFree(psz);
             flutter::EncodableMap voiceInfo;
             voiceInfo[flutter::EncodableValue("locale")] = language;
             voiceInfo[flutter::EncodableValue("name")] = name;
             voices.push_back(flutter::EncodableMap(voiceInfo));
-			cpVoiceToken->Release();
 		}
 	}
 	void FlutterTtsPlugin::setVoice(const std::string voiceLanguage, const std::string voiceName, FlutterResult& result) {
 		HRESULT hr;
-		IEnumSpObjectTokens* cpEnum = NULL;
+		CComPtr<IEnumSpObjectTokens> cpEnum;
 		hr = SpEnumTokens(SPCAT_VOICES, NULL, NULL, &cpEnum);
 		if (FAILED(hr)) { result->Success(0); return; }
 		ULONG ulCount = 0;
 		hr = cpEnum->GetCount(&ulCount);
 		if (FAILED(hr)) { result->Success(0); return; }
-		ISpObjectToken* cpVoiceToken = NULL;
 		bool success = false;
 		while (ulCount--)
 		{
-			cpVoiceToken = NULL;
+			CComPtr<ISpObjectToken> cpVoiceToken;
 			hr = cpEnum->Next(1, &cpVoiceToken, NULL);
 			if (FAILED(hr)) { result->Success(0); return; }
 			CComPtr<ISpDataKey> cpAttribKey;
@@ -581,6 +582,7 @@ namespace {
 			::CoTaskMemFree(psz);
 			psz = NULL;
 			hr = cpAttribKey->GetStringValue(L"Language", &psz);
+			if (FAILED(hr)) { result->Success(0); return; }
 		    wchar_t locale[25];
             LCIDToLocaleName((LCID)std::strtol(CW2A(psz), NULL, 16), locale, 25, 0);
             ::CoTaskMemFree(psz);
@@ -590,14 +592,13 @@ namespace {
 				pVoice->SetVoice(cpVoiceToken);
 				success = true;
 			}
-			cpVoiceToken->Release();
 		}
 		result->Success(success ? 1 : 0);
 	}
 	void FlutterTtsPlugin::getLanguages(flutter::EncodableList& languages)
 	{
 		HRESULT hr;
-		IEnumSpObjectTokens* cpEnum = NULL;
+		CComPtr<IEnumSpObjectTokens> cpEnum;
 		hr = SpEnumTokens(SPCAT_VOICES, NULL, NULL, &cpEnum);
 		if (FAILED(hr)) return;
 
@@ -605,11 +606,10 @@ namespace {
 		// Get the number of voices.
 		hr = cpEnum->GetCount(&ulCount);
 		if (FAILED(hr)) return;
-		ISpObjectToken* cpVoiceToken = NULL;
         std::set<flutter::EncodableValue> languagesSet = {};
 		while (ulCount--)
 		{
-			cpVoiceToken = NULL;
+			CComPtr<ISpObjectToken> cpVoiceToken;
 			hr = cpEnum->Next(1, &cpVoiceToken, NULL);
 			if (FAILED(hr)) return;
 			CComPtr<ISpDataKey> cpAttribKey;
@@ -618,12 +618,12 @@ namespace {
 
 			WCHAR* psz = NULL;
 			hr = cpAttribKey->GetStringValue(L"Language", &psz);
+			if (FAILED(hr)) return;
 		    wchar_t locale[25];
             LCIDToLocaleName((LCID)std::strtol(CW2A(psz), NULL, 16), locale, 25, 0);
             std::string language = CW2A(locale);
 			languagesSet.insert(flutter::EncodableValue(language));
 			::CoTaskMemFree(psz);
-			cpVoiceToken->Release();
 		}
         std::for_each(begin(languagesSet), end(languagesSet), [&languages](const flutter::EncodableValue value)
             {
@@ -633,17 +633,16 @@ namespace {
 
 	void FlutterTtsPlugin::setLanguage(const std::string voiceLanguage, FlutterResult& result) {
 		HRESULT hr;
-		IEnumSpObjectTokens* cpEnum = NULL;
+		CComPtr<IEnumSpObjectTokens> cpEnum;
 		hr = SpEnumTokens(SPCAT_VOICES, NULL, NULL, &cpEnum);
 		if (FAILED(hr)) { result->Success(0); return; }
 		ULONG ulCount = 0;
 		hr = cpEnum->GetCount(&ulCount);
 		if (FAILED(hr)) { result->Success(0); return; }
-		ISpObjectToken* cpVoiceToken = NULL;
 		bool found = false;
 		while (ulCount--)
 		{
-			cpVoiceToken = NULL;
+			CComPtr<ISpObjectToken> cpVoiceToken;
 			hr = cpEnum->Next(1, &cpVoiceToken, NULL);
 			if (FAILED(hr)) { result->Success(0); return; }
 			CComPtr<ISpDataKey> cpAttribKey;
@@ -652,6 +651,7 @@ namespace {
 
 			WCHAR* psz = NULL;
 			hr = cpAttribKey->GetStringValue(L"Language", &psz);
+			if (FAILED(hr)) { result->Success(0); return; }
 		    wchar_t locale[25];
             LCIDToLocaleName((LCID)std::strtol(CW2A(psz), NULL, 16), locale, 25, 0);
             std::string language = CW2A(locale);
@@ -661,7 +661,6 @@ namespace {
 				found = true;
 			}
 			::CoTaskMemFree(psz);
-			cpVoiceToken->Release();
 		}
 		if (found) result->Success(1);
 		else result->Success(0);

@@ -17,6 +17,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   var awaitSynthCompletion: Bool = false
   var speakResult: FlutterResult? = nil
   var synthResult: FlutterResult? = nil
+  var synthesizeUtteranceIds = Set<ObjectIdentifier>()
 
   var channel = FlutterMethodChannel()
   init(channel: FlutterMethodChannel) {
@@ -41,44 +42,70 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
     case "speak":
-      let text: String = call.arguments as! String
+      guard let text = call.arguments as? String else {
+        result(FlutterError(code: "InvalidArgument", message: "speak requires a String argument", details: nil))
+        return
+      }
       self.speak(text: text, result: result)
       break
     case "awaitSpeakCompletion":
-      self.awaitSpeakCompletion = call.arguments as! Bool
+      guard let awaitCompletion = call.arguments as? Bool else {
+        result(FlutterError(code: "InvalidArgument", message: "awaitSpeakCompletion requires a Bool argument", details: nil))
+        return
+      }
+      self.awaitSpeakCompletion = awaitCompletion
       result(1)
       break
     case "awaitSynthCompletion":
-      self.awaitSynthCompletion = call.arguments as! Bool
+      guard let awaitCompletion = call.arguments as? Bool else {
+        result(FlutterError(code: "InvalidArgument", message: "awaitSynthCompletion requires a Bool argument", details: nil))
+        return
+      }
+      self.awaitSynthCompletion = awaitCompletion
       result(1)
       break
     case "synthesizeToFile":
       guard let args = call.arguments as? [String: Any] else {
-        result("iOS could not recognize flutter arguments in method: (sendParams)")
+        result(FlutterError(code: "InvalidArgument", message: "synthesizeToFile requires a map argument", details: nil))
         return
       }
-      let text = args["text"] as! String
-      let fileName = args["fileName"] as! String
+      guard let text = args["text"] as? String,
+            let fileName = args["fileName"] as? String else {
+        result(FlutterError(code: "InvalidArgument", message: "synthesizeToFile requires text and fileName arguments", details: nil))
+        return
+      }
       self.synthesizeToFile(text: text, fileName: fileName, result: result)
       break
     case "pause":
       self.pause(result: result)
       break
     case "setLanguage":
-      let language: String = call.arguments as! String
+      guard let language = call.arguments as? String else {
+        result(FlutterError(code: "InvalidArgument", message: "setLanguage requires a String argument", details: nil))
+        return
+      }
       self.setLanguage(language: language, result: result)
       break
     case "setSpeechRate":
-      let rate: Double = call.arguments as! Double
+      guard let rate = call.arguments as? Double else {
+        result(FlutterError(code: "InvalidArgument", message: "setSpeechRate requires a double argument", details: nil))
+        return
+      }
       self.setRate(rate: Float(rate))
       result(1)
       break
     case "setVolume":
-      let volume: Double = call.arguments as! Double
+      guard let volume = call.arguments as? Double else {
+        result(FlutterError(code: "InvalidArgument", message: "setVolume requires a double argument", details: nil))
+        return
+      }
       self.setVolume(volume: Float(volume), result: result)
       break
     case "setPitch":
-      let pitch: Double = call.arguments as! Double
+      guard let pitch = call.arguments as? Double else {
+        result(FlutterError(code: "InvalidArgument", message: "setPitch requires a double argument", details: nil))
+        return
+      }
       self.setPitch(pitch: Float(pitch), result: result)
       break
     case "stop":
@@ -92,7 +119,10 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
       self.getSpeechRateValidRange(result: result)
       break
     case "isLanguageAvailable":
-      let language: String = call.arguments as! String
+      guard let language = call.arguments as? String else {
+        result(FlutterError(code: "InvalidArgument", message: "isLanguageAvailable requires a String argument", details: nil))
+        return
+      }
       self.isLanguageAvailable(language: language, result: result)
       break
     case "getVoices":
@@ -100,10 +130,14 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
       break
     case "setVoice":
       guard let args = call.arguments as? [String: String] else {
-        result("iOS could not recognize flutter arguments in method: (sendParams)")
+        result(FlutterError(code: "InvalidArgument", message: "setVoice requires a string map argument", details: nil))
         return
       }
       self.setVoice(voice: args, result: result)
+      break
+    case "clearVoice":
+      self.clearVoice()
+      result(1)
       break
     case "autoStopSharedSession":
       // MacOS does not have a shared audio session so just accept the call
@@ -153,7 +187,9 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
     var output: AVAudioFile?
     var completed = false
     let utterance = AVSpeechUtterance(string: text)
+    let utteranceId = ObjectIdentifier(utterance)
     let shouldAwait = self.awaitSynthCompletion
+    self.synthesizeUtteranceIds.insert(utteranceId)
 
     if self.voice != nil {
       utterance.voice = self.voice!
@@ -177,6 +213,9 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
         }
         if shouldAwait {
           result(value)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+          self.synthesizeUtteranceIds.remove(utteranceId)
         }
       }
     }
@@ -296,8 +335,8 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   private func getVoices(result: FlutterResult) {
     if #available(macOS 10.15, *) {
       let voices = NSMutableArray()
-      var voiceDict: [String: String] = [:]
       for voice in AVSpeechSynthesisVoice.speechVoices() {
+        var voiceDict: [String: String] = [:]
         voiceDict["name"] = voice.name
         voiceDict["locale"] = voice.language
         voiceDict["quality"] = voice.quality.stringValue
@@ -318,66 +357,73 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
 
 
   private func setVoice(voice: [String: String], result: FlutterResult) {
-      if #available(iOS 9.0, *) {
-          // Check if identifier exists and is not empty
-          if let identifier = voice["identifier"], !identifier.isEmpty {
-              // Find the voice by identifier
-              if let selectedVoice = AVSpeechSynthesisVoice(identifier: identifier) {
+      // Check if identifier exists and is not empty
+      if let identifier = voice["identifier"], !identifier.isEmpty {
+          // Find the voice by identifier
+          if let selectedVoice = AVSpeechSynthesisVoice(identifier: identifier) {
+              self.voice = selectedVoice
+              self.language = selectedVoice.language
+              result(1)
+              return
+          }
+      }
+
+      // If no valid identifier, search by name and locale, then prioritize by quality
+      if let name = voice["name"], let locale = voice["locale"] {
+          let matchingVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.name == name && $0.language == locale }
+
+          if !matchingVoices.isEmpty {
+              // Sort voices by quality: premium (if available) > enhanced > others
+              let sortedVoices = matchingVoices.sorted { (voice1, voice2) -> Bool in
+                  let quality1 = voice1.quality
+                  let quality2 = voice2.quality
+
+                  // macOS 13.0+ supports premium quality
+                  if #available(macOS 13.0, *) {
+                      if quality1 == .premium {
+                          return true
+                      } else if quality1 == .enhanced && quality2 != .premium {
+                          return true
+                      } else {
+                          return false
+                      }
+                  } else {
+                      // Fallback for macOS versions before 13.0 (no premium)
+                      if quality1 == .enhanced {
+                          return true
+                      } else {
+                          return false
+                      }
+                  }
+              }
+
+              // Select the highest quality voice
+              if let selectedVoice = sortedVoices.first {
                   self.voice = selectedVoice
                   self.language = selectedVoice.language
                   result(1)
                   return
               }
           }
-
-          // If no valid identifier, search by name and locale, then prioritize by quality
-          if let name = voice["name"], let locale = voice["locale"] {
-              let matchingVoices = AVSpeechSynthesisVoice.speechVoices().filter { $0.name == name && $0.language == locale }
-
-              if !matchingVoices.isEmpty {
-                  // Sort voices by quality: premium (if available) > enhanced > others
-                  let sortedVoices = matchingVoices.sorted { (voice1, voice2) -> Bool in
-                      let quality1 = voice1.quality
-                      let quality2 = voice2.quality
-
-                      // macOS 13.0+ supports premium quality
-                      if #available(macOS 13.0, *) {
-                          if quality1 == .premium {
-                              return true
-                          } else if quality1 == .enhanced && quality2 != .premium {
-                              return true
-                          } else {
-                              return false
-                          }
-                      } else {
-                          // Fallback for macOS versions before 13.0 (no premium)
-                          if quality1 == .enhanced {
-                              return true
-                          } else {
-                              return false
-                          }
-                      }
-                  }
-
-                  // Select the highest quality voice
-                  if let selectedVoice = sortedVoices.first {
-                      self.voice = selectedVoice
-                      self.language = selectedVoice.language
-                      result(1)
-                      return
-                  }
-              }
-          }
-
-          // No matching voice found
-          result(0)
-      } else {
-          // Handle older iOS versions if needed
-          setLanguage(language: voice["name"]!, result: result)
       }
+
+      // No matching voice found
+      result(0)
+  }
+
+  private func clearVoice() {
+    self.voice = nil
+  }
+
+  private func isSynthesizeToFileUtterance(_ utterance: AVSpeechUtterance) -> Bool {
+    return self.synthesizeUtteranceIds.contains(ObjectIdentifier(utterance))
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+    if isSynthesizeToFileUtterance(utterance) {
+      self.synthesizeUtteranceIds.remove(ObjectIdentifier(utterance))
+      return
+    }
     if self.awaitSpeakCompletion && self.speakResult != nil {
       self.speakResult!(1)
       self.speakResult = nil
@@ -390,18 +436,31 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+    if isSynthesizeToFileUtterance(utterance) {
+      return
+    }
     self.channel.invokeMethod("speak.onStart", arguments: nil)
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didPause utterance: AVSpeechUtterance) {
+    if isSynthesizeToFileUtterance(utterance) {
+      return
+    }
     self.channel.invokeMethod("speak.onPause", arguments: nil)
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didContinue utterance: AVSpeechUtterance) {
+    if isSynthesizeToFileUtterance(utterance) {
+      return
+    }
     self.channel.invokeMethod("speak.onContinue", arguments: nil)
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    if isSynthesizeToFileUtterance(utterance) {
+      self.synthesizeUtteranceIds.remove(ObjectIdentifier(utterance))
+      return
+    }
     if self.awaitSpeakCompletion && self.speakResult != nil {
       self.speakResult!(0)
       self.speakResult = nil
@@ -410,6 +469,9 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   }
 
   public func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, willSpeakRangeOfSpeechString characterRange: NSRange, utterance: AVSpeechUtterance) {
+    if isSynthesizeToFileUtterance(utterance) {
+      return
+    }
     let nsWord = utterance.speechString as NSString
     let data: [String:String] = [
       "text": utterance.speechString,

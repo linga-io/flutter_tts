@@ -361,19 +361,32 @@ class FlutterTts {
     _activeInstance = this;
   }
 
+  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
+  static bool get _isIOS => !kIsWeb && Platform.isIOS;
+  static bool get _isMacOS => !kIsWeb && Platform.isMacOS;
+  static bool get _isWindows => !kIsWeb && Platform.isWindows;
+
+  static void _throwUnsupported(String method, String platforms) {
+    throw UnsupportedError('$method is only supported on $platforms.');
+  }
+
   /// [Future] which sets speak's future to return on completion of the utterance
   Future<dynamic> awaitSpeakCompletion(bool awaitCompletion) async =>
       await _channel.invokeMethod('awaitSpeakCompletion', awaitCompletion);
 
   /// [Future] which sets synthesize to file's future to return on completion of the synthesize
   /// ***Android, iOS, and macOS supported only***
-  Future<dynamic> awaitSynthCompletion(bool awaitCompletion) async =>
-      await _channel.invokeMethod('awaitSynthCompletion', awaitCompletion);
+  Future<dynamic> awaitSynthCompletion(bool awaitCompletion) async {
+    if (!_isAndroid && !_isIOS && !_isMacOS) {
+      _throwUnsupported('awaitSynthCompletion', 'Android, iOS, and macOS');
+    }
+    return await _channel.invokeMethod('awaitSynthCompletion', awaitCompletion);
+  }
 
   /// [Future] which invokes the platform specific method for speaking
   Future<dynamic> speak(String text, {bool focus = false}) async {
     _activatePlatformCallHandler();
-    if (!kIsWeb && Platform.isAndroid) {
+    if (_isAndroid) {
       return await _channel.invokeMethod('speak', <String, dynamic>{
         "text": text,
         "focus": focus,
@@ -392,13 +405,19 @@ class FlutterTts {
   /// [Future] which invokes the platform specific method for getMaxSpeechInputLength
   /// ***Android supported only***
   Future<int?> get getMaxSpeechInputLength async {
+    if (!_isAndroid) {
+      _throwUnsupported('getMaxSpeechInputLength', 'Android');
+    }
     return await _channel.invokeMethod<int?>('getMaxSpeechInputLength');
   }
 
   /// [Future] which invokes the platform specific method for synthesizeToFile
-  /// ***Android and iOS supported only***
+  /// ***Android, iOS, and macOS supported only***
   Future<dynamic> synthesizeToFile(String text, String fileName,
       [bool isFullPath = false]) async {
+    if (!_isAndroid && !_isIOS && !_isMacOS) {
+      _throwUnsupported('synthesizeToFile', 'Android, iOS, and macOS');
+    }
     _activatePlatformCallHandler();
     return _channel.invokeMethod('synthesizeToFile', <String, dynamic>{
       "text": text,
@@ -423,14 +442,22 @@ class FlutterTts {
 
   /// [Future] which invokes the platform specific method for shared instance
   /// ***iOS supported only***
-  Future<dynamic> setSharedInstance(bool sharedSession) async =>
-      await _channel.invokeMethod('setSharedInstance', sharedSession);
+  Future<dynamic> setSharedInstance(bool sharedSession) async {
+    if (!_isIOS) {
+      _throwUnsupported('setSharedInstance', 'iOS');
+    }
+    return await _channel.invokeMethod('setSharedInstance', sharedSession);
+  }
 
   /// [Future] which invokes the platform specific method for setting the autoStopSharedSession
   /// default value is true
   /// *** iOS, and macOS supported only***
-  Future<dynamic> autoStopSharedSession(bool autoStop) async =>
-      await _channel.invokeMethod('autoStopSharedSession', autoStop);
+  Future<dynamic> autoStopSharedSession(bool autoStop) async {
+    if (!_isIOS && !_isMacOS) {
+      _throwUnsupported('autoStopSharedSession', 'iOS and macOS');
+    }
+    return await _channel.invokeMethod('autoStopSharedSession', autoStop);
+  }
 
   /// [Future] which invokes the platform specific method for setting audio category
   /// ***Ios supported only***
@@ -472,7 +499,7 @@ class FlutterTts {
       IosTextToSpeechAudioMode.voiceChat: iosAudioModeVoiceChat,
       IosTextToSpeechAudioMode.voicePrompt: iosAudioModeVoicePrompt,
     };
-    if (!Platform.isIOS) return;
+    if (!_isIOS) return;
     try {
       return await _channel
           .invokeMethod<dynamic>('setIosAudioCategory', <String, dynamic>{
@@ -490,6 +517,9 @@ class FlutterTts {
   /// [Future] which invokes the platform specific method for setEngine
   /// ***Android supported only***
   Future<dynamic> setEngine(String engine) async {
+    if (!_isAndroid) {
+      _throwUnsupported('setEngine', 'Android');
+    }
     await _channel.invokeMethod('setEngine', engine);
   }
 
@@ -504,8 +534,12 @@ class FlutterTts {
       await _channel.invokeMethod('setVoice', voice);
 
   /// [Future] which resets the platform voice to the default
-  Future<dynamic> clearVoice() async =>
-      await _channel.invokeMethod('clearVoice');
+  Future<dynamic> clearVoice() async {
+    if (!_isAndroid && !_isIOS && !_isMacOS) {
+      _throwUnsupported('clearVoice', 'Android, iOS, and macOS');
+    }
+    return await _channel.invokeMethod('clearVoice');
+  }
 
   /// [Future] which invokes the platform specific method for stop
   Future<dynamic> stop() async {
@@ -525,6 +559,9 @@ class FlutterTts {
   /// Returns a list of installed TTS engines
   /// ***Android supported only***
   Future<dynamic> get getEngines async {
+    if (!_isAndroid) {
+      _throwUnsupported('getEngines', 'Android');
+    }
     final engines = await _channel.invokeMethod('getEngines');
     return engines;
   }
@@ -533,6 +570,9 @@ class FlutterTts {
   /// Returns a `String` of the default engine name
   /// ***Android supported only ***
   Future<dynamic> get getDefaultEngine async {
+    if (!_isAndroid) {
+      _throwUnsupported('getDefaultEngine', 'Android');
+    }
     final engineName = await _channel.invokeMethod('getDefaultEngine');
     return engineName;
   }
@@ -541,6 +581,9 @@ class FlutterTts {
   /// Returns a `Map` containing a voice name and locale
   /// ***Android supported only ***
   Future<dynamic> get getDefaultVoice async {
+    if (!_isAndroid) {
+      _throwUnsupported('getDefaultVoice', 'Android');
+    }
     final voice = await _channel.invokeMethod('getDefaultVoice');
     return voice;
   }
@@ -562,17 +605,25 @@ class FlutterTts {
   /// [Future] which invokes the platform specific method for isLanguageInstalled
   /// Returns `true` or `false`
   /// ***Android supported only***
-  Future<dynamic> isLanguageInstalled(String language) async =>
-      await _channel.invokeMethod('isLanguageInstalled', language);
+  Future<dynamic> isLanguageInstalled(String language) async {
+    if (!_isAndroid) {
+      _throwUnsupported('isLanguageInstalled', 'Android');
+    }
+    return await _channel.invokeMethod('isLanguageInstalled', language);
+  }
 
   /// [Future] which invokes the platform specific method for areLanguagesInstalled
   /// Returns a HashMap with `true` or `false` for each submitted language.
   /// ***Android supported only***
-  Future<dynamic> areLanguagesInstalled(List<String> languages) async =>
-      await _channel.invokeMethod('areLanguagesInstalled', languages);
+  Future<dynamic> areLanguagesInstalled(List<String> languages) async {
+    if (!_isAndroid) {
+      _throwUnsupported('areLanguagesInstalled', 'Android');
+    }
+    return await _channel.invokeMethod('areLanguagesInstalled', languages);
+  }
 
   Future<SpeechRateValidRange> get getSpeechRateValidRange async {
-    if (kIsWeb || Platform.isWindows) {
+    if (kIsWeb || _isWindows) {
       throw UnsupportedError(
         'getSpeechRateValidRange is only supported on Android, iOS, and macOS.',
       );
@@ -592,16 +643,24 @@ class FlutterTts {
   /// [Future] which invokes the platform specific method for setSilence
   /// 0 means start the utterance immediately. If the value is greater than zero a silence period in milliseconds is set according to the parameter
   /// ***Android supported only***
-  Future<dynamic> setSilence(int timems) async =>
-      await _channel.invokeMethod('setSilence', timems);
+  Future<dynamic> setSilence(int timems) async {
+    if (!_isAndroid) {
+      _throwUnsupported('setSilence', 'Android');
+    }
+    return await _channel.invokeMethod('setSilence', timems);
+  }
 
   /// [Future] which invokes the platform specific method for setQueueMode
   /// 0 means QUEUE_FLUSH - Queue mode where all entries in the playback queue (media to be played and text to be synthesized) are dropped and replaced by the new entry.
   /// Queues are flushed with respect to a given calling app. Entries in the queue from other calls are not discarded.
   /// 1 means QUEUE_ADD - Queue mode where the new entry is added at the end of the playback queue.
   /// ***Android supported only***
-  Future<dynamic> setQueueMode(int queueMode) async =>
-      await _channel.invokeMethod('setQueueMode', queueMode);
+  Future<dynamic> setQueueMode(int queueMode) async {
+    if (!_isAndroid) {
+      _throwUnsupported('setQueueMode', 'Android');
+    }
+    return await _channel.invokeMethod('setQueueMode', queueMode);
+  }
 
   void setStartHandler(VoidCallback callback) {
     startHandler = callback;
@@ -697,6 +756,9 @@ class FlutterTts {
   }
 
   Future<void> setAudioAttributesForNavigation() async {
+    if (!_isAndroid) {
+      _throwUnsupported('setAudioAttributesForNavigation', 'Android');
+    }
     await _channel.invokeMethod('setAudioAttributesForNavigation');
   }
 }

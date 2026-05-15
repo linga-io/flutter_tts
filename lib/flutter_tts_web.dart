@@ -8,6 +8,9 @@ import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 
 import 'interop_types.dart';
 
+@JS('String')
+external JSString _jsString(JSAny? value);
+
 enum TtsState { playing, stopped, paused, continued }
 
 class FlutterTtsPlugin {
@@ -93,13 +96,13 @@ class FlutterTtsPlugin {
 
     utterance.onError = (JSObject event) {
       ttsState = TtsState.stopped;
+      final errorMessage = _jsString(event["error"] ?? event).toDart;
       if (_speechCompleter != null) {
-        _speechCompleter?.completeError(event["error"] ?? event);
+        _speechCompleter?.completeError(errorMessage);
         _speechCompleter = null;
       }
       t?.cancel();
-      print(event); // Log the entire event object to get more details
-      channel.invokeMethod("speak.onError", event["error"]);
+      channel.invokeMethod("speak.onError", errorMessage);
     }.toJS;
 
     utterance.onBoundary = (JSObject event) {

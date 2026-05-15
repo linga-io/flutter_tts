@@ -9,12 +9,15 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <exception>
 #include <sstream>
+#include <string>
 
 typedef std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> FlutterResult;
 //typedef flutter::MethodResult<flutter::EncodableValue>* PFlutterResult;
 
 constexpr UINT kFlutterTtsSpeakCompleteMessage = WM_APP + 0x3D7;
+constexpr UINT kFlutterTtsSpeakErrorMessage = WM_APP + 0x3D8;
 
 #if defined(WINAPI_FAMILY) && (WINAPI_FAMILY == WINAPI_FAMILY_DESKTOP_APP)
 #include <winrt/Windows.Media.SpeechSynthesis.h>
@@ -51,7 +54,9 @@ namespace {
 		bool isLanguageAvailable(const std::string);
 		void addMplayer();
 		void onSpeakComplete();
+		void onSpeakError(const std::string& error);
 		void postSpeakComplete();
+		void postSpeakError(const std::string& error);
 		std::optional<LRESULT> HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 		winrt::Windows::Foundation::IAsyncAction asyncSpeak(const std::string);
 		bool speaking();
@@ -66,6 +71,7 @@ namespace {
 		flutter::PluginRegistrarWindows* registrar;
 		HWND windowHandle;
 		int windowProcId;
+		std::string speakError;
 	};
 
 	void FlutterTtsPlugin::RegisterWithRegistrar(
@@ -102,6 +108,18 @@ namespace {
 		isSpeaking = false;
 	}
 
+	void FlutterTtsPlugin::onSpeakError(const std::string& error) {
+		methodChannel->InvokeMethod(
+			"speak.onError",
+			std::make_unique<flutter::EncodableValue>(error));
+		if (awaitSpeakCompletion && speakResult) {
+			speakResult->Success(0);
+			speakResult = FlutterResult();
+		}
+		isSpeaking = false;
+		isPaused = false;
+	}
+
 	void FlutterTtsPlugin::postSpeakComplete() {
 		if (windowHandle != nullptr) {
 			PostMessage(windowHandle, kFlutterTtsSpeakCompleteMessage, 0, 0);
@@ -110,9 +128,22 @@ namespace {
 		}
 	}
 
+	void FlutterTtsPlugin::postSpeakError(const std::string& error) {
+		speakError = error;
+		if (windowHandle != nullptr) {
+			PostMessage(windowHandle, kFlutterTtsSpeakErrorMessage, 0, 0);
+		} else {
+			onSpeakError(speakError);
+		}
+	}
+
 	std::optional<LRESULT> FlutterTtsPlugin::HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
 		if (message == kFlutterTtsSpeakCompleteMessage) {
 			onSpeakComplete();
+			return 0;
+		}
+		if (message == kFlutterTtsSpeakErrorMessage) {
+			onSpeakError(speakError);
 			return 0;
 		}
 		return std::nullopt;
@@ -127,14 +158,22 @@ namespace {
 	}
 
 	winrt::Windows::Foundation::IAsyncAction FlutterTtsPlugin::asyncSpeak(const std::string text) {
-		SpeechSynthesisStream speechStream{
-		  co_await synth.SynthesizeTextToStreamAsync(to_hstring(text))
-		};
-		winrt::param::hstring cType = L"Audio";
-		winrt::Windows::Media::Core::MediaSource source =
-			winrt::Windows::Media::Core::MediaSource::CreateFromStream(speechStream, cType);
-		mPlayer.Source(source);
-		mPlayer.Play();
+		try {
+			SpeechSynthesisStream speechStream{
+			  co_await synth.SynthesizeTextToStreamAsync(to_hstring(text))
+			};
+			winrt::param::hstring cType = L"Audio";
+			winrt::Windows::Media::Core::MediaSource source =
+				winrt::Windows::Media::Core::MediaSource::CreateFromStream(speechStream, cType);
+			mPlayer.Source(source);
+			mPlayer.Play();
+		} catch (const winrt::hresult_error& error) {
+			postSpeakError(to_string(error.message()));
+		} catch (const std::exception& error) {
+			postSpeakError(error.what());
+		} catch (...) {
+			postSpeakError("Error from Windows TextToSpeech");
+		}
 	}
 
 	void FlutterTtsPlugin::speak(const std::string text, FlutterResult result) {
@@ -158,7 +197,10 @@ namespace {
 	}
 
 	void FlutterTtsPlugin::stop() {
-	    methodChannel->InvokeMethod("speak.onCancel", NULL);
+	    const bool hadActiveSpeech = isSpeaking || isPaused || speakResult != nullptr;
+	    if (hadActiveSpeech) {
+	        methodChannel->InvokeMethod("speak.onCancel", NULL);
+	    }
         if (awaitSpeakCompletion && speakResult) {
             speakResult->Success(0);
 			speakResult = FlutterResult();

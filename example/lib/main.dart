@@ -52,6 +52,13 @@ class MyAppState extends State<MyApp> {
   bool get isWindows => !kIsWeb && Platform.isWindows;
   bool get isWeb => kIsWeb;
 
+  T? _firstWhereOrNull<T>(Iterable<T> items, bool Function(T item) test) {
+    for (final item in items) {
+      if (test(item)) return item;
+    }
+    return null;
+  }
+
   @override
   initState() {
     super.initState();
@@ -159,8 +166,10 @@ class MyAppState extends State<MyApp> {
     if (isAndroid) {
       var defVoice = await flutterTts.getDefaultVoice;
       if (kDebugMode) debugPrint('Android Default Voice: $defVoice');
-      if (defVoice != null) {
-        var rawVoice = rawVoices.firstWhere((v) => mapEquals(v, defVoice));
+      if (defVoice is Map) {
+        final defaultVoice = Map<String, String>.from(defVoice);
+        var rawVoice =
+            _firstWhereOrNull(rawVoices, (v) => mapEquals(v, defaultVoice));
         voice = rawVoice;
         if (voice != null) changedVoicesDropDownItem(voice);
       }
@@ -180,9 +189,15 @@ class MyAppState extends State<MyApp> {
       }
       if (kDebugMode) debugPrint('Device/Browser Locale (BCP47): $myLocale');
       // TTS auto-selects the first matching raw voice with locale
-      var rawVoice = rawVoices.firstWhere((v) => v?['locale'] == myLocale,
-          orElse: () => rawVoices
-              .firstWhere((v) => v?['locale']?.startsWith(myLocale) ?? false));
+      var rawVoice = _firstWhereOrNull<Map<String, String>?>(
+            rawVoices,
+            (v) => v?['locale'] == myLocale,
+          ) ??
+          _firstWhereOrNull<Map<String, String>?>(rawVoices, (v) {
+            final locale = v?['locale'];
+            return locale != null &&
+                (locale.startsWith(myLocale) || myLocale.startsWith(locale));
+          });
       voice = rawVoice;
       if (kDebugMode) debugPrint('Computed Default Voice: $voice');
       if (voice != null) changedVoicesDropDownItem(voice);
@@ -346,10 +361,14 @@ class MyAppState extends State<MyApp> {
 
     // if the locale is changed, TTS auto-selects the first matching voice
     if (voiceItems.isNotEmpty) {
-      var voiceItem =
-          voiceItems.firstWhere((v) => v.value?['locale'] == selectedLanguage);
-      voice = voiceItem.value;
-      if (voice != null) changedVoicesDropDownItem(voice);
+      var voiceItem = _firstWhereOrNull(
+          voiceItems, (v) => v.value?['locale'] == selectedLanguage);
+      voice = voiceItem?.value;
+      if (voice != null) {
+        await changedVoicesDropDownItem(voice);
+      } else {
+        setState(() {});
+      }
     }
   }
 

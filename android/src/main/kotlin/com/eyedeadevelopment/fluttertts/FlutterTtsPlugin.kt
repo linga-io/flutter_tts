@@ -190,6 +190,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
                     closeParcelFileDescriptor(true)
                     if (awaitSynthCompletion) {
+                        synthCompletion(0)
+                    } else {
                         synth = false
                     }
                     invokeMethod("synth.onError", "Error from TextToSpeech (synth)")
@@ -208,6 +210,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
                     closeParcelFileDescriptor(true)
                     if (awaitSynthCompletion) {
+                        synthCompletion(0)
+                    } else {
                         synth = false
                     }
                     invokeMethod("synth.onError", "Error from TextToSpeech (synth) - $errorCode")

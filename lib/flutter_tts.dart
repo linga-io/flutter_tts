@@ -530,7 +530,7 @@ class FlutterTts {
     if (!_isAndroid) {
       _throwUnsupported('setEngine', 'Android');
     }
-    await _channel.invokeMethod('setEngine', engine);
+    return await _channel.invokeMethod('setEngine', engine);
   }
 
   /// [Future] which invokes the platform specific method for setPitch

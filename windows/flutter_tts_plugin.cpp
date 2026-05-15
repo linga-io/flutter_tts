@@ -8,12 +8,14 @@
 #include <flutter/standard_method_codec.h>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 
 typedef std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> FlutterResult;
 //typedef flutter::MethodResult<flutter::EncodableValue>* PFlutterResult;
 
 std::unique_ptr<flutter::MethodChannel<>> methodChannel;
+constexpr UINT kFlutterTtsSpeakCompleteMessage = WM_APP + 0x3D7;
 
 #if defined(WINAPI_FAMILY) && (WINAPI_FAMILY == WINAPI_FAMILY_DESKTOP_APP)
 #include <winrt/Windows.Media.SpeechSynthesis.h>
@@ -29,7 +31,7 @@ namespace {
 	class FlutterTtsPlugin : public flutter::Plugin {
 	public:
 		static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar);
-		FlutterTtsPlugin();
+		FlutterTtsPlugin(flutter::PluginRegistrarWindows* registrar);
 		virtual ~FlutterTtsPlugin();
 	private:
 		// Called when a method is called on this plugin's channel from Dart.
@@ -48,6 +50,9 @@ namespace {
 		void getLanguages(flutter::EncodableList&);
 		void setLanguage(const std::string, FlutterResult&);
 		void addMplayer();
+		void onSpeakComplete();
+		void postSpeakComplete();
+		std::optional<LRESULT> HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 		winrt::Windows::Foundation::IAsyncAction asyncSpeak(const std::string);
 		bool speaking();
 		bool paused();
@@ -57,6 +62,9 @@ namespace {
 		bool isSpeaking;
 		bool awaitSpeakCompletion;
 		FlutterResult speakResult;
+		flutter::PluginRegistrarWindows* registrar;
+		HWND windowHandle;
+		int windowProcId;
 	};
 
 	void FlutterTtsPlugin::RegisterWithRegistrar(
@@ -65,7 +73,7 @@ namespace {
 			std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
 				registrar->messenger(), "flutter_tts",
 				&flutter::StandardMethodCodec::GetInstance());
-		auto plugin = std::make_unique<FlutterTtsPlugin>();
+		auto plugin = std::make_unique<FlutterTtsPlugin>(registrar);
 
 		methodChannel->SetMethodCallHandler(
 			[plugin_pointer = plugin.get()](const auto& call, auto result) {
@@ -80,13 +88,33 @@ namespace {
 			mPlayer.MediaEnded([=](Windows::Media::Playback::MediaPlayer const& sender,
 				Windows::Foundation::IInspectable const& args)
 				{
-				    methodChannel->InvokeMethod("speak.onComplete", NULL);
-				    if (awaitSpeakCompletion && speakResult) {
-                        speakResult->Success(1);
-						speakResult = FlutterResult();
-                    }
-					isSpeaking = false;
+				    postSpeakComplete();
 				});
+	}
+
+	void FlutterTtsPlugin::onSpeakComplete() {
+		methodChannel->InvokeMethod("speak.onComplete", NULL);
+		if (awaitSpeakCompletion && speakResult) {
+			speakResult->Success(1);
+			speakResult = FlutterResult();
+		}
+		isSpeaking = false;
+	}
+
+	void FlutterTtsPlugin::postSpeakComplete() {
+		if (windowHandle != nullptr) {
+			PostMessage(windowHandle, kFlutterTtsSpeakCompleteMessage, 0, 0);
+		} else {
+			onSpeakComplete();
+		}
+	}
+
+	std::optional<LRESULT> FlutterTtsPlugin::HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+		if (message == kFlutterTtsSpeakCompleteMessage) {
+			onSpeakComplete();
+			return 0;
+		}
+		return std::nullopt;
 	}
 
 	bool FlutterTtsPlugin::speaking() {
@@ -223,8 +251,13 @@ namespace {
 	}
 
 
-	FlutterTtsPlugin::FlutterTtsPlugin() {
+	FlutterTtsPlugin::FlutterTtsPlugin(flutter::PluginRegistrarWindows* registrar) : registrar(registrar) {
 		synth = SpeechSynthesizer();
+		windowHandle = registrar->GetView() ? registrar->GetView()->GetNativeWindow() : nullptr;
+		windowProcId = registrar->RegisterTopLevelWindowProcDelegate(
+			[this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+				return HandleWindowProc(hwnd, message, wparam, lparam);
+			});
 		addMplayer();
 		isPaused = false;
 		isSpeaking = false;
@@ -232,7 +265,10 @@ namespace {
 		speakResult = FlutterResult();
 	}
 
-	FlutterTtsPlugin::~FlutterTtsPlugin() { mPlayer.Close(); }
+	FlutterTtsPlugin::~FlutterTtsPlugin() {
+		registrar->UnregisterTopLevelWindowProcDelegate(windowProcId);
+		mPlayer.Close();
+	}
 
 	void FlutterTtsPlugin::HandleMethodCall(
 		const flutter::MethodCall<flutter::EncodableValue>& method_call,
@@ -256,7 +292,7 @@ namespace {
 	class FlutterTtsPlugin : public flutter::Plugin {
 	public:
 		static void RegisterWithRegistrar(flutter::PluginRegistrarWindows* registrar);
-		FlutterTtsPlugin();
+		FlutterTtsPlugin(flutter::PluginRegistrarWindows* registrar);
 		virtual ~FlutterTtsPlugin();
 	private:
 		// Called when a method is called on this plugin's channel from Dart.
@@ -277,6 +313,8 @@ namespace {
 		void setLanguage(const std::string, FlutterResult&);
 		void onSpeakComplete();
 		void completePendingSpeak(const int);
+		void postSpeakComplete();
+		std::optional<LRESULT> HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 
 		ISpVoice* pVoice;
 		bool awaitSpeakCompletion = false;
@@ -287,6 +325,9 @@ namespace {
 		bool paused();
 		FlutterResult speakResult;
     	HANDLE addWaitHandle;
+		flutter::PluginRegistrarWindows* registrar;
+		HWND windowHandle;
+		int windowProcId;
 	};
 
 	void FlutterTtsPlugin::RegisterWithRegistrar(
@@ -295,7 +336,7 @@ namespace {
 			std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
 				registrar->messenger(), "flutter_tts",
 				&flutter::StandardMethodCodec::GetInstance());
-		auto plugin = std::make_unique<FlutterTtsPlugin>();
+		auto plugin = std::make_unique<FlutterTtsPlugin>(registrar);
 		methodChannel->SetMethodCallHandler(
 			[plugin_pointer = plugin.get()](const auto& call, auto result) {
 			plugin_pointer->HandleMethodCall(call, std::move(result));
@@ -304,8 +345,13 @@ namespace {
 		registrar->AddPlugin(std::move(plugin));
 	}
 
-	FlutterTtsPlugin::FlutterTtsPlugin() {
+	FlutterTtsPlugin::FlutterTtsPlugin(flutter::PluginRegistrarWindows* registrar) : registrar(registrar) {
 		addWaitHandle = NULL;
+		windowHandle = registrar->GetView() ? registrar->GetView()->GetNativeWindow() : nullptr;
+		windowProcId = registrar->RegisterTopLevelWindowProcDelegate(
+			[this](HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+				return HandleWindowProc(hwnd, message, wparam, lparam);
+			});
 		isPaused = false;
 		suppressNextCompletion = false;
 		speakResult = NULL;
@@ -326,13 +372,22 @@ namespace {
 	}
 
 	FlutterTtsPlugin::~FlutterTtsPlugin() {
+		if (addWaitHandle != NULL) {
+			UnregisterWaitEx(addWaitHandle, INVALID_HANDLE_VALUE);
+			addWaitHandle = NULL;
+		}
+		if (pVoice != NULL) {
+			pVoice->Release();
+			pVoice = NULL;
+		}
+		registrar->UnregisterTopLevelWindowProcDelegate(windowProcId);
 		::CoUninitialize();
 	}
 
-    void CALLBACK onCompletion(PVOID lpParam, BOOLEAN TimerOrWaitFired)
+	void CALLBACK onCompletion(PVOID lpParam, BOOLEAN TimerOrWaitFired)
     {
         FlutterTtsPlugin* plugin = static_cast<FlutterTtsPlugin*>(lpParam);
-        plugin->onSpeakComplete();
+        plugin->postSpeakComplete();
     }
 
 	std::string escapeSapiXml(const std::string& text) {
@@ -370,13 +425,37 @@ namespace {
 		}
 	}
 
+	void FlutterTtsPlugin::postSpeakComplete() {
+		if (windowHandle != nullptr) {
+			PostMessage(windowHandle, kFlutterTtsSpeakCompleteMessage, 0, 0);
+		} else {
+			onSpeakComplete();
+		}
+	}
+
+	std::optional<LRESULT> FlutterTtsPlugin::HandleWindowProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
+		if (message == kFlutterTtsSpeakCompleteMessage) {
+			onSpeakComplete();
+			return 0;
+		}
+		return std::nullopt;
+	}
+
 	void FlutterTtsPlugin::onSpeakComplete() {
 		if (suppressNextCompletion) {
 			suppressNextCompletion = false;
+			if (addWaitHandle != NULL) {
+				UnregisterWaitEx(addWaitHandle, NULL);
+				addWaitHandle = NULL;
+			}
 			return;
 		}
 		methodChannel->InvokeMethod("speak.onComplete", NULL);
 		completePendingSpeak(1);
+		if (addWaitHandle != NULL) {
+			UnregisterWaitEx(addWaitHandle, NULL);
+			addWaitHandle = NULL;
+		}
 	}
 
 	bool FlutterTtsPlugin::speaking()

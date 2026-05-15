@@ -32,4 +32,6 @@ environment:
   sdk: ">=3.4.0 <4.0.0"
   flutter: ">=1.22.0"
 dev_dependencies:
+  flutter_test:
+    sdk: flutter
   lints: ^3.0.0

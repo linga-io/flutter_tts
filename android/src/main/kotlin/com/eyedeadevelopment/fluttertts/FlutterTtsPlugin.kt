@@ -25,7 +25,6 @@ import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import java.io.File
-import java.lang.reflect.Field
 import java.util.Locale
 import java.util.MissingResourceException
 import java.util.UUID
@@ -253,17 +252,21 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                     Log.e(tag, "getDefaultLocale: " + e.message)
                 }
 
-                try {
-                    if (engineResult != null) {
-                        engineResult!!.success(1)
+                engineResult?.let {
+                    try {
+                        it.success(1)
+                    } catch (e: IllegalStateException) {
+                        Log.d(tag, "OnInitListener: " + e.message)
                     }
-                } catch (e: IllegalStateException) {
-                    Log.d(tag, "OnInitListener: " + e.message)
                 }
             } else {
-                engineResult!!.error("TtsError","Failed to initialize TextToSpeech with status: $status", null)
+                engineResult?.error(
+                    "TtsError",
+                    "Failed to initialize TextToSpeech with status: $status",
+                    null
+                )
             }
-            //engineResult = null
+            engineResult = null
         }
 
     private val onInitListenerWithoutCallback: TextToSpeech.OnInitListener =
@@ -528,6 +531,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         ttsStatus = null
         selectedEngine = engine
         engineResult = result
+        tts?.stop()
+        tts?.shutdown()
         tts = TextToSpeech(context, onInitListenerWithCallback, engine)
     }
 
@@ -694,7 +699,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     private fun speak(text: String, focus: Boolean): SpeakStatus {
         val uuid: String = UUID.randomUUID().toString()
         utterances[uuid] = text
-        return if (ismServiceConnectionUsable(tts)) {
+        return if (isTtsReady()) {
             if(focus){
                 requestAudioFocus()
             }
@@ -818,30 +823,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         }
     }
 
-    private fun ismServiceConnectionUsable(tts: TextToSpeech?): Boolean {
-        var isBindConnection = true
-        if (tts == null) {
-            return false
-        }
-        val fields: Array<Field> = tts.javaClass.declaredFields
-        for (j in fields.indices) {
-            fields[j].isAccessible = true
-            if ("mServiceConnection" == fields[j].name && "android.speech.tts.TextToSpeech\$Connection" == fields[j].type.name) {
-                try {
-                    if (fields[j][tts] == null) {
-                        isBindConnection = false
-                        Log.e(tag, "*******TTS -> mServiceConnection == null*******")
-                    }
-                } catch (e: IllegalArgumentException) {
-                    e.printStackTrace()
-                } catch (e: IllegalAccessException) {
-                    e.printStackTrace()
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
-        }
-        return isBindConnection
+    private fun isTtsReady(): Boolean {
+        return tts != null && ttsStatus == TextToSpeech.SUCCESS
     }
 
     // Method to set AudioAttributes for navigation usage

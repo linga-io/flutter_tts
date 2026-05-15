@@ -139,7 +139,7 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
   private func speak(text: String, result: @escaping FlutterResult) {
     if (self.synthesizer.isPaused) {
       if (self.synthesizer.continueSpeaking()) {
-        if self.awaitSpeakCompletion {
+        if self.awaitSpeakCompletion && self.speakResult == nil {
           self.speakResult = result
         } else {
           result(1)
@@ -148,6 +148,10 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
         result(0)
       }
     } else {
+      if self.awaitSpeakCompletion && self.speakResult != nil {
+        result(0)
+        return
+      }
       let utterance = AVSpeechUtterance(string: text)
       if self.voice != nil {
         utterance.voice = self.voice!
@@ -187,14 +191,20 @@ public class SwiftFlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizer
         return
       }
       completed = true
-      if shouldAwait {
-        DispatchQueue.main.async {
+      DispatchQueue.main.async {
+        if value == 1 {
+          self.channel.invokeMethod("synth.onComplete", arguments: nil)
+        } else {
+          self.channel.invokeMethod("synth.onError", arguments: "Error synthesizing TTS to file")
+        }
+        if shouldAwait {
           result(value)
         }
       }
     }
 
     if #available(iOS 13.0, *) {
+      self.channel.invokeMethod("synth.onStart", arguments: nil)
       self.synthesizer.write(utterance) { (buffer: AVAudioBuffer) in
         guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
             NSLog("unknow buffer type: \(buffer)")

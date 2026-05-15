@@ -42,7 +42,7 @@ const String iosAudioModeVideoRecording = 'iosAudioModeVideoRecording';
 const String iosAudioModeVoiceChat = 'iosAudioModeVoiceChat';
 const String iosAudioModeVoicePrompt = 'iosAudioModeVoicePrompt';
 
-enum TextToSpeechPlatform { android, ios }
+enum TextToSpeechPlatform { android, ios, macos }
 
 /// Audio session category identifiers for iOS.
 ///
@@ -572,6 +572,11 @@ class FlutterTts {
       await _channel.invokeMethod('areLanguagesInstalled', languages);
 
   Future<SpeechRateValidRange> get getSpeechRateValidRange async {
+    if (kIsWeb || Platform.isWindows) {
+      throw UnsupportedError(
+        'getSpeechRateValidRange is only supported on Android, iOS, and macOS.',
+      );
+    }
     final validRange = await _channel.invokeMethod('getSpeechRateValidRange')
         as Map<dynamic, dynamic>;
     final min = double.parse(validRange['min'].toString());

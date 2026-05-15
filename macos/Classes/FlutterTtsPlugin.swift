@@ -117,7 +117,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
   private func speak(text: String, result: @escaping FlutterResult) {
     if (self.synthesizer.isPaused) {
       if (self.synthesizer.continueSpeaking()) {
-        if self.awaitSpeakCompletion {
+        if self.awaitSpeakCompletion && self.speakResult == nil {
           self.speakResult = result
         } else {
           result(1)
@@ -126,6 +126,10 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
         result(0)
       }
     } else {
+      if self.awaitSpeakCompletion && self.speakResult != nil {
+        result(0)
+        return
+      }
       let utterance = AVSpeechUtterance(string: text)
       if self.voice != nil {
         utterance.voice = self.voice!
@@ -165,14 +169,20 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
         return
       }
       completed = true
-      if shouldAwait {
-        DispatchQueue.main.async {
+      DispatchQueue.main.async {
+        if value == 1 {
+          self.channel.invokeMethod("synth.onComplete", arguments: nil)
+        } else {
+          self.channel.invokeMethod("synth.onError", arguments: "Error synthesizing TTS to file")
+        }
+        if shouldAwait {
           result(value)
         }
       }
     }
 
     if #available(macOS 10.15, *) {
+      self.channel.invokeMethod("synth.onStart", arguments: nil)
       self.synthesizer.write(utterance) { (buffer: AVAudioBuffer) in
         guard let pcmBuffer = buffer as? AVAudioPCMBuffer else {
             NSLog("unknow buffer type: \(buffer)")
@@ -270,7 +280,7 @@ public class FlutterTtsPlugin: NSObject, FlutterPlugin, AVSpeechSynthesizerDeleg
       "min": String(AVSpeechUtteranceMinimumSpeechRate),
       "normal": String(AVSpeechUtteranceDefaultSpeechRate),
       "max": String(AVSpeechUtteranceMaximumSpeechRate),
-      "platform": "ios"
+      "platform": "macos"
     ]
     result(validSpeechRateRange)
   }

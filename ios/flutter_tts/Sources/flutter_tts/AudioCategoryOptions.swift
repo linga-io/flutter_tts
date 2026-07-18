@@ -8,7 +8,7 @@ enum AudioCategoryOptions: String {
   case iosAudioCategoryOptionsAllowBluetoothA2DP
   case iosAudioCategoryOptionsAllowAirPlay
   case iosAudioCategoryOptionsDefaultToSpeaker
-  
+
   func toAVAudioSessionCategoryOptions() -> AVAudioSession.CategoryOptions? {
     switch self {
     case .iosAudioCategoryOptionsMixWithOthers:
@@ -22,7 +22,7 @@ enum AudioCategoryOptions: String {
         return nil
       }
     case .iosAudioCategoryOptionsAllowBluetooth:
-      return .allowBluetooth
+      return .allowBluetoothHFP
     case .iosAudioCategoryOptionsAllowBluetoothA2DP:
       if #available(iOS 10.0, *) {
         return .allowBluetoothA2DP

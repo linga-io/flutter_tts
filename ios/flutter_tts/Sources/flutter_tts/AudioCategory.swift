@@ -5,7 +5,7 @@ enum AudioCategory: String {
   case iosAudioCategoryAmbient
   case iosAudioCategoryPlayback
   case iosAudioCategoryPlaybackAndRecord
-  
+
   func toAVAudioSessionCategory() -> AVAudioSession.Category {
     switch self {
     case .iosAudioCategoryAmbientSolo:

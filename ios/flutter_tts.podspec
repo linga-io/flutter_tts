@@ -8,15 +8,14 @@ Pod::Spec.new do |s|
   s.description      = <<-DESC
 A flutter text to speech plugin
                        DESC
-  s.homepage         = 'https://github.com/dlutton/flutter_tts'
+  s.homepage         = 'https://github.com/linga-io/flutter_tts'
   s.license          = { :file => '../LICENSE' }
   s.author           = { 'eyedeadevelopment' => 'eyedea32@gmail.com' }
   s.source           = { :path => '.' }
-  s.source_files = 'Classes/**/*'
-  s.public_header_files = 'Classes/**/*.h'
+  s.source_files = 'flutter_tts/Sources/flutter_tts/**/*'
+  s.public_header_files = 'flutter_tts/Sources/flutter_tts/include/**/*.h'
   s.dependency 'Flutter'
-  s.ios.deployment_target = '8.0'
-  s.swift_version = '4.2'
+  s.ios.deployment_target = '13.0'
+  s.swift_version = '5.0'
   s.static_framework = true
 end
-

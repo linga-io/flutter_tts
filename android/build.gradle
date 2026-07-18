@@ -1,18 +1,22 @@
 def args = ["-Xlint:deprecation"]
 
-group 'com.eyedeadevelopment.fluttertts'
-version '1.0-SNAPSHOT'
+group = 'com.eyedeadevelopment.fluttertts'
+version = '1.0-SNAPSHOT'
 
 buildscript {
-    ext.kotlin_version = '2.2.20'
     repositories {
         google()
         mavenCentral()
     }
 
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.13.0'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    // Flutter host apps provide AGP (and KGP on AGP 8) to plugin subprojects.
+    // Keep local classpaths only when this Android project is opened standalone.
+    if (project == rootProject) {
+        dependencies {
+            //noinspection AndroidGradlePluginVersion
+            classpath 'com.android.tools.build:gradle:8.13.2'
+            classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20'
+        }
     }
 }
 
@@ -27,37 +31,60 @@ project.getTasks().withType(JavaCompile).configureEach {
     options.compilerArgs.addAll(args)
 }
 
-apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
+// Programmatic application avoids Flutter 3.44's text-only migration scanner
+// treating the conditional KGP fallback below as unconditional.
+pluginManager.apply('com.android.library')
+
+// AGP 9 provides built-in Kotlin unless the host explicitly opts out. Linga
+// still consumes this plugin from an AGP 8 host, where KGP remains necessary.
+// Query the applied plugin rather than com.android.Version. Flutter's included
+// Gradle build can expose a different AGP classpath version to plugin scripts.
+def agpMajor = extensions.getByName('androidComponents').pluginVersion.major
+def builtInKotlinProperty = project.findProperty('android.builtInKotlin')
+def usesBuiltInKotlin = agpMajor >= 9 &&
+    (builtInKotlinProperty == null || builtInKotlinProperty.toString().toBoolean())
+if (!usesBuiltInKotlin) {
+    apply plugin: 'kotlin-android'
+}
 
 android {
-    compileSdk 36
-    if (project.android.hasProperty("namespace")) {
-        namespace 'com.eyedeadevelopment.fluttertts'
-    }
+    compileSdk = 36
+    namespace = 'com.eyedeadevelopment.fluttertts'
 
     defaultConfig {
-        minSdkVersion 21
-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        minSdk = 24
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    lintOptions {
-        disable 'InvalidPackage'
-        disable 'GradleDependency'
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    lint {
+        disable 'InvalidPackage', 'GradleDependency'
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
+}
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_11
-    }
+if (usesBuiltInKotlin) {
+    // AGP 9 built-in Kotlin exposes the typed compilerOptions API. Resolve
+    // JvmTarget dynamically so this script still loads with KGP 1.x hosts,
+    // where that type does not exist.
+    def kotlinExtension = extensions.getByName('kotlin')
+    def jvmTargetClass = kotlinExtension.class.classLoader.loadClass(
+        'org.jetbrains.kotlin.gradle.dsl.JvmTarget'
+    )
+    def jvm11 = jvmTargetClass.enumConstants.find { it.name() == 'JVM_11' }
+    kotlinExtension.compilerOptions.jvmTarget.set(jvm11)
+} else {
+    // Flutter 3.22-era AGP/KGP versions use the legacy Android Kotlin DSL.
+    android.kotlinOptions.jvmTarget = JavaVersion.VERSION_11.toString()
 }
-dependencies {
-    implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-}
+
 repositories {
     mavenCentral()
 }

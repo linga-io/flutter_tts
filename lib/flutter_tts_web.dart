@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 
 import 'interop_types.dart';
+import 'src/web_boundary.dart';
 
 @JS('String')
 external JSString _jsString(JSAny? value);
@@ -20,8 +21,6 @@ class FlutterTtsPlugin {
 
   TtsState ttsState = TtsState.stopped;
 
-  Completer<dynamic>? _speechCompleter;
-
   bool get isPlaying => ttsState == TtsState.playing;
 
   bool get isStopped => ttsState == TtsState.stopped;
@@ -31,105 +30,148 @@ class FlutterTtsPlugin {
   bool get isContinued => ttsState == TtsState.continued;
 
   static void registerWith(Registrar registrar) {
-    channel =
-        MethodChannel(platformChannel, const StandardMethodCodec(), registrar);
+    channel = MethodChannel(
+      platformChannel,
+      const StandardMethodCodec(),
+      registrar,
+    );
     final instance = FlutterTtsPlugin();
     channel.setMethodCallHandler(instance.handleMethodCall);
   }
 
-  late final SpeechSynthesisUtterance utterance;
+  _WebSpeechSession? _activeSession;
+  SpeechSynthesisVoice? _selectedVoice;
+  String? _selectedLanguage;
+  double _rate = 1;
+  double _volume = 1;
+  double _pitch = 1;
   List<SpeechSynthesisVoice> voices = [];
   List<String> languages = [];
-  Timer? t;
+  Timer? _keepAliveTimer;
+  Timer? _keepAliveEventResetTimer;
+  bool _suppressKeepAlivePause = false;
+  bool _suppressKeepAliveResume = false;
   bool supported = false;
 
   FlutterTtsPlugin() {
     try {
-      utterance = SpeechSynthesisUtterance();
-      _listeners();
+      SpeechSynthesisUtterance();
       _refreshVoices();
+      synth.onVoicesChanged = (JSAny e) {
+        _refreshVoices();
+      }.toJS;
       supported = true;
     } catch (e) {
       print('Initialization of TTS failed. Functions are disabled. Error: $e');
     }
   }
 
-  void _listeners() {
+  void _attachListeners(_WebSpeechSession session) {
+    final utterance = session.utterance;
     utterance.onStart = (JSAny e) {
+      if (!_isActive(session)) return;
       ttsState = TtsState.playing;
-      channel.invokeMethod("speak.onStart", null);
-      var bLocal = (utterance.voice?.isLocalService ?? false);
-      if (!bLocal) {
-        t = Timer.periodic(Duration(seconds: 14), (t) {
-          if (ttsState == TtsState.playing) {
-            synth.pause();
-            synth.resume();
-          } else {
-            t.cancel();
-          }
-        });
-      }
+      channel.invokeMethod(
+        "speak.onStart",
+        _eventArguments(session.utteranceId),
+      );
+      _startKeepAliveIfNeeded(session);
     }.toJS;
-    // js.JsFunction.withThis((e) {
-    //   ttsState = TtsState.playing;
-    //   channel.invokeMethod("speak.onStart", null);
-    // });
     utterance.onEnd = (JSAny e) {
-      ttsState = TtsState.stopped;
-      if (_speechCompleter != null) {
-        _speechCompleter?.complete();
-        _speechCompleter = null;
-      }
-      t?.cancel();
-      channel.invokeMethod("speak.onComplete", null);
+      if (!_isActive(session)) return;
+      _finishSession(session, completionValue: 1);
+      channel.invokeMethod(
+        "speak.onComplete",
+        _eventArguments(session.utteranceId),
+      );
     }.toJS;
 
     utterance.onPause = (JSAny e) {
+      if (!_isActive(session)) return;
+      if (_suppressKeepAlivePause) {
+        _suppressKeepAlivePause = false;
+        return;
+      }
+      if (ttsState == TtsState.paused) return;
       ttsState = TtsState.paused;
-      channel.invokeMethod("speak.onPause", null);
+      _keepAliveTimer?.cancel();
+      _keepAliveTimer = null;
+      channel.invokeMethod(
+        "speak.onPause",
+        _eventArguments(session.utteranceId),
+      );
     }.toJS;
 
     utterance.onResume = (JSAny e) {
+      if (!_isActive(session)) return;
+      if (_suppressKeepAliveResume) {
+        _suppressKeepAliveResume = false;
+        return;
+      }
+      if (ttsState == TtsState.continued) return;
       ttsState = TtsState.continued;
-      channel.invokeMethod("speak.onContinue", null);
+      channel.invokeMethod(
+        "speak.onContinue",
+        _eventArguments(session.utteranceId),
+      );
+      // An explicit pause may outlive the periodic keepalive timer. Restart it
+      // after the browser confirms that speech has resumed.
+      _startKeepAliveIfNeeded(session);
     }.toJS;
 
     utterance.onError = (JSObject event) {
-      ttsState = TtsState.stopped;
+      if (!_isActive(session)) return;
       final errorMessage = _jsString(event["error"] ?? event).toDart;
-      if (_speechCompleter != null) {
-        _speechCompleter?.completeError(errorMessage);
-        _speechCompleter = null;
-      }
-      t?.cancel();
-      channel.invokeMethod("speak.onError", errorMessage);
+      _finishSession(session, error: errorMessage);
+      channel.invokeMethod(
+        "speak.onError",
+        _errorArguments(session.utteranceId, errorMessage),
+      );
     }.toJS;
 
     utterance.onBoundary = (JSObject event) {
+      if (!_isActive(session)) return;
       final charIndex = (event['charIndex'] as JSNumber?)?.toDartInt;
+      final charLength = (event['charLength'] as JSNumber?)?.toDartInt;
       final name = (event['name'] as JSString?)?.toDart;
-      if (charIndex == null || name == null) return;
+      if (charIndex == null) return;
       if (name == 'sentence') return;
-      String text = utterance.text;
+      final text = session.text;
       if (charIndex < 0 || charIndex >= text.length) return;
-      int endIndex = charIndex;
-      while (endIndex < text.length &&
-          !RegExp(r'[\s,.!?]').hasMatch(text[endIndex])) {
-        endIndex++;
-      }
-      String word = text.substring(charIndex, endIndex);
-      Map<String, dynamic> progressArgs = {
+      final endIndex = resolveWebSpeechBoundaryEnd(text, charIndex, charLength);
+      if (endIndex <= charIndex) return;
+      final word = text.substring(charIndex, endIndex);
+      final progressArgs = <String, dynamic>{
         'text': text,
         'start': charIndex,
         'end': endIndex,
-        'word': word
+        'word': word,
+        if (session.utteranceId != null) 'utteranceId': session.utteranceId,
       };
       channel.invokeMethod("speak.onProgress", progressArgs);
     }.toJS;
+  }
 
-    synth.onVoicesChanged = (JSAny e) {
-      _refreshVoices();
-    }.toJS;
+  void _startKeepAliveIfNeeded(_WebSpeechSession session) {
+    if (session.utterance.voice?.isLocalService ?? false) return;
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = Timer.periodic(const Duration(seconds: 14), (timer) {
+      final isActivelySpeaking =
+          ttsState == TtsState.playing || ttsState == TtsState.continued;
+      if (!_isActive(session) || !isActivelySpeaking) {
+        timer.cancel();
+        return;
+      }
+      _suppressKeepAlivePause = true;
+      _suppressKeepAliveResume = true;
+      synth.pause();
+      synth.resume();
+      _keepAliveEventResetTimer?.cancel();
+      _keepAliveEventResetTimer = Timer(const Duration(seconds: 1), () {
+        _suppressKeepAlivePause = false;
+        _suppressKeepAliveResume = false;
+      });
+    });
   }
 
   Future<dynamic> handleMethodCall(MethodCall call) async {
@@ -141,19 +183,19 @@ class FlutterTtsPlugin {
     }
     switch (call.method) {
       case 'speak':
-        final text = call.arguments as String?;
-        if (awaitSpeakCompletion && _speechCompleter != null) {
-          return 0;
+        final request = _speechRequest(call.arguments);
+        if (request == null) return 0;
+        final activeSession = _activeSession;
+        if (isPaused && activeSession != null) {
+          if (request.utteranceId != activeSession.utteranceId) return 0;
+          // Do not let a delayed keepalive event hide the explicit resume.
+          _suppressKeepAliveResume = false;
+          synth.resume();
+          return 1;
         }
-        final didStart = _speak(text);
-        if (awaitSpeakCompletion) {
-          _speechCompleter = Completer();
-          if (!didStart) {
-            _speechCompleter?.complete(0);
-          }
-          return _speechCompleter?.future;
-        }
-        return didStart ? 1 : 0;
+        final session = _startSpeech(request);
+        if (session == null) return 0;
+        return session.completer?.future ?? 1;
       case 'awaitSpeakCompletion':
         awaitSpeakCompletion = (call.arguments as bool?) ?? false;
         return 1;
@@ -161,8 +203,7 @@ class FlutterTtsPlugin {
         _stop();
         return 1;
       case 'pause':
-        _pause();
-        return 1;
+        return _pause() ? 1 : 0;
       case 'setLanguage':
         final language = call.arguments as String;
         return _setLanguage(language) ? 1 : 0;
@@ -171,8 +212,9 @@ class FlutterTtsPlugin {
       case 'getVoices':
         return getVoices();
       case 'setVoice':
-        final tmpVoiceMap =
-            Map<String, String>.from(call.arguments as LinkedHashMap);
+        final tmpVoiceMap = Map<String, String>.from(
+          call.arguments as LinkedHashMap,
+        );
         return _setVoice(tmpVoiceMap) ? 1 : 0;
       case 'setSpeechRate':
         final rate = call.arguments as double;
@@ -191,54 +233,135 @@ class FlutterTtsPlugin {
         return _isLanguageAvailable(lang);
       default:
         throw PlatformException(
-            code: 'Unimplemented',
-            details: "The flutter_tts plugin for web doesn't implement "
-                "the method '${call.method}'");
+          code: 'Unimplemented',
+          details: "The flutter_tts plugin for web doesn't implement "
+              "the method '${call.method}'",
+        );
     }
   }
 
-  bool _speak(String? text) {
-    if (text == null || text.isEmpty) return false;
-    if (ttsState == TtsState.stopped || ttsState == TtsState.paused) {
-      utterance.text = text;
-      if (ttsState == TtsState.paused) {
-        synth.resume();
-      } else {
-        synth.speak(utterance);
-      }
-      return true;
+  _SpeechRequest? _speechRequest(dynamic arguments) {
+    if (arguments is String) {
+      return arguments.isEmpty ? null : _SpeechRequest(arguments, null);
     }
-    return false;
+    if (arguments is Map) {
+      final text = arguments['text'];
+      final utteranceId = arguments['utteranceId'];
+      if (text is String &&
+          text.isNotEmpty &&
+          (utteranceId == null ||
+              (utteranceId is String && utteranceId.isNotEmpty))) {
+        return _SpeechRequest(text, utteranceId as String?);
+      }
+    }
+    return null;
+  }
+
+  _WebSpeechSession? _startSpeech(_SpeechRequest request) {
+    // Do not rely on onStart to mark the operation active. Browsers dispatch
+    // it asynchronously, so a second immediate speak must already be rejected.
+    if (_activeSession != null) return null;
+
+    final utterance = SpeechSynthesisUtterance()
+      ..text = request.text
+      ..rate = _rate
+      ..volume = _volume
+      ..pitch = _pitch;
+    final voice = _selectedVoice;
+    if (voice != null) utterance.voice = voice;
+    final language = _selectedLanguage;
+    if (language != null) utterance.lang = language;
+    final session = _WebSpeechSession(
+      utterance,
+      request.text,
+      request.utteranceId,
+      awaitSpeakCompletion ? Completer<dynamic>() : null,
+    );
+    _activeSession = session;
+    _attachListeners(session);
+    try {
+      synth.speak(utterance);
+    } catch (_) {
+      _finishSession(session);
+      rethrow;
+    }
+    return session;
   }
 
   void _stop() {
-    if (ttsState != TtsState.stopped) {
+    final session = _activeSession;
+    if (session != null) {
+      // onStart may not have fired yet, but the utterance is already queued.
+      _finishSession(session, completionValue: 0);
       synth.cancel();
+      channel.invokeMethod(
+        'speak.onCancel',
+        _eventArguments(session.utteranceId),
+      );
     }
+  }
+
+  bool _pause() {
+    if (_activeSession == null) return false;
+    if (ttsState == TtsState.paused) return true;
+    // A browser may omit one half of the keepalive pause/resume event pair.
+    // Ensure the next pause event still represents this explicit request.
+    _suppressKeepAlivePause = false;
+    synth.pause();
+    return true;
+  }
+
+  bool _isActive(_WebSpeechSession session) =>
+      identical(_activeSession, session);
+
+  void _finishSession(
+    _WebSpeechSession session, {
+    Object? error,
+    dynamic completionValue,
+  }) {
+    if (!_isActive(session)) return;
+    _activeSession = null;
     ttsState = TtsState.stopped;
-    t?.cancel();
-    if (_speechCompleter != null) {
-      _speechCompleter?.complete(0);
-      _speechCompleter = null;
+    _keepAliveTimer?.cancel();
+    _keepAliveTimer = null;
+    _keepAliveEventResetTimer?.cancel();
+    _keepAliveEventResetTimer = null;
+    _suppressKeepAlivePause = false;
+    _suppressKeepAliveResume = false;
+    final completer = session.completer;
+    if (completer != null && !completer.isCompleted) {
+      if (session.utteranceId != null) {
+        completer.complete(<String, dynamic>{
+          'accepted': true,
+          'value': error == null ? completionValue : 0,
+        });
+      } else if (error != null) {
+        completer.completeError(error);
+      } else {
+        completer.complete(completionValue);
+      }
     }
   }
 
-  void _pause() {
-    if (ttsState == TtsState.playing || ttsState == TtsState.continued) {
-      synth.pause();
-    }
-  }
+  dynamic _eventArguments(String? utteranceId) => utteranceId == null
+      ? null
+      : <String, dynamic>{'utteranceId': utteranceId};
 
-  void _setRate(double rate) => utterance.rate = rate;
-  void _setVolume(double volume) => utterance.volume = volume;
-  void _setPitch(double pitch) => utterance.pitch = pitch;
+  dynamic _errorArguments(String? utteranceId, String message) =>
+      utteranceId == null
+          ? message
+          : <String, dynamic>{'utteranceId': utteranceId, 'message': message};
+
+  void _setRate(double rate) => _rate = rate;
+  void _setVolume(double volume) => _volume = volume;
+  void _setPitch(double pitch) => _pitch = pitch;
   bool _setLanguage(String language) {
     var targetList = voices.where((e) {
-      return e.lang.toLowerCase().startsWith(language.toLowerCase());
+      return _languageMatches(language, e.lang);
     });
     if (targetList.isNotEmpty) {
-      utterance.voice = targetList.first;
-      utterance.lang = targetList.first.lang;
+      _selectedVoice = targetList.first;
+      _selectedLanguage = targetList.first.lang;
       return true;
     }
     return false;
@@ -249,22 +372,29 @@ class FlutterTtsPlugin {
       return voice["name"] == e.name && voice["locale"] == e.lang;
     });
     if (targetList.isNotEmpty) {
-      utterance.voice = targetList.first;
+      _selectedVoice = targetList.first;
+      _selectedLanguage = targetList.first.lang;
       return true;
     }
     return false;
   }
 
   bool _isLanguageAvailable(String? language) {
+    if (language == null || language.isEmpty) return false;
     if (voices.isEmpty) _setVoices();
     if (languages.isEmpty) _setLanguages();
     for (var lang in languages) {
-      if (!language!.contains('-')) {
-        lang = lang.split('-').first;
-      }
-      if (lang.toLowerCase() == language.toLowerCase()) return true;
+      if (_languageMatches(language, lang)) return true;
     }
     return false;
+  }
+
+  bool _languageMatches(String requested, String candidate) {
+    final normalizedRequested = requested.replaceAll('_', '-').toLowerCase();
+    final normalizedCandidate = candidate.replaceAll('_', '-').toLowerCase();
+    if (normalizedCandidate == normalizedRequested) return true;
+    return !normalizedRequested.contains('-') &&
+        normalizedCandidate.split('-').first == normalizedRequested;
   }
 
   List<String?>? _getLanguages() {
@@ -297,4 +427,25 @@ class FlutterTtsPlugin {
 
     languages = langs.toList();
   }
+}
+
+class _SpeechRequest {
+  final String text;
+  final String? utteranceId;
+
+  const _SpeechRequest(this.text, this.utteranceId);
+}
+
+class _WebSpeechSession {
+  final SpeechSynthesisUtterance utterance;
+  final String text;
+  final String? utteranceId;
+  final Completer<dynamic>? completer;
+
+  const _WebSpeechSession(
+    this.utterance,
+    this.text,
+    this.utteranceId,
+    this.completer,
+  );
 }

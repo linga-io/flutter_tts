@@ -1,4 +1,4 @@
-#import "FlutterTtsPlugin.h"
+#import "./include/flutter_tts/FlutterTtsPlugin.h"
 #if __has_include(<flutter_tts/flutter_tts-Swift.h>)
 #import <flutter_tts/flutter_tts-Swift.h>
 #else

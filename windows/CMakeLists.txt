@@ -7,7 +7,8 @@ endif()
 set(PROJECT_NAME "flutter_tts")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
-set(CPPWINRT_PACKAGE_DIR "${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.CppWinRT")
+set(CPPWINRT_VERSION "2.0.250303.1")
+set(CPPWINRT_PACKAGE_DIR "${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.CppWinRT.${CPPWINRT_VERSION}")
 if(NOT EXISTS "${CPPWINRT_PACKAGE_DIR}/build/native/Microsoft.Windows.CppWinRT.props")
     find_program(NUGET_EXE NAMES nuget)
     if(NOT NUGET_EXE)
@@ -16,8 +17,7 @@ if(NOT EXISTS "${CPPWINRT_PACKAGE_DIR}/build/native/Microsoft.Windows.CppWinRT.p
 
     execute_process(
             COMMAND ${NUGET_EXE} install Microsoft.Windows.CppWinRT
-            -Version 2.0.210503.1
-            -ExcludeVersion
+            -Version ${CPPWINRT_VERSION}
             -OutputDirectory ${CMAKE_BINARY_DIR}/packages
             RESULT_VARIABLE NUGET_RESULT
             OUTPUT_VARIABLE NUGET_OUTPUT

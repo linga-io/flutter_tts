@@ -8,6 +8,27 @@ typedef ErrorHandler = void Function(dynamic message);
 typedef ProgressHandler = void Function(
     String text, int start, int end, String word);
 
+/// Receives a speech lifecycle event and its caller-supplied utterance ID.
+///
+/// The value is `null` for speech submitted through the legacy tokenless API.
+typedef UtteranceHandler = void Function(String? utteranceId);
+
+/// Receives a speech error correlated with its caller-supplied utterance ID.
+typedef UtteranceErrorHandler = void Function(
+    String? utteranceId, dynamic message);
+
+/// Receives a validated speech range correlated with an utterance ID.
+///
+/// [start] and [end] are UTF-16 code-unit offsets and can be passed directly
+/// to [String.substring].
+typedef UtteranceProgressHandler = void Function(
+  String? utteranceId,
+  String text,
+  int start,
+  int end,
+  String word,
+);
+
 const String iosAudioCategoryOptionsKey = 'iosAudioCategoryOptionsKey';
 const String iosAudioCategoryKey = 'iosAudioCategoryKey';
 const String iosAudioModeKey = 'iosAudioModeKey';
@@ -316,20 +337,31 @@ enum IosTextToSpeechAudioCategoryOptions {
   defaultToSpeaker,
 }
 
+/// Platform-specific normalized speech-rate limits.
 class SpeechRateValidRange {
+  /// Slowest accepted normalized rate.
   final double min;
+
+  /// Platform's normal speaking rate.
   final double normal;
+
+  /// Fastest accepted normalized rate.
   final double max;
+
+  /// Platform that reported these limits.
   final TextToSpeechPlatform platform;
 
-  SpeechRateValidRange(this.min, this.normal, this.max, this.platform);
+  /// Creates an immutable platform speech-rate range.
+  const SpeechRateValidRange(this.min, this.normal, this.max, this.platform);
 }
 
-// Provides Platform specific TTS services (Android: TextToSpeech, IOS: AVSpeechSynthesizer)
+/// Provides platform text-to-speech services through Flutter method channels.
 class FlutterTts {
   static const MethodChannel _channel = MethodChannel('flutter_tts');
   static FlutterTts? _activeInstance;
   static bool _platformCallHandlerInstalled = false;
+  static final Map<String, FlutterTts> _utteranceOwners =
+      <String, FlutterTts>{};
 
   VoidCallback? startHandler;
   VoidCallback? completionHandler;
@@ -338,6 +370,13 @@ class FlutterTts {
   VoidCallback? cancelHandler;
   ProgressHandler? progressHandler;
   ErrorHandler? errorHandler;
+  UtteranceHandler? utteranceStartHandler;
+  UtteranceHandler? utteranceCompletionHandler;
+  UtteranceHandler? utterancePauseHandler;
+  UtteranceHandler? utteranceContinueHandler;
+  UtteranceHandler? utteranceCancelHandler;
+  UtteranceProgressHandler? utteranceProgressHandler;
+  UtteranceErrorHandler? utteranceErrorHandler;
 
   FlutterTts() {
     _ensurePlatformCallHandlerInstalled();
@@ -353,8 +392,32 @@ class FlutterTts {
   }
 
   static Future<dynamic> _platformCallHandler(MethodCall call) async {
-    return _activeInstance?.platformCallHandler(call);
+    final utteranceId = _utteranceIdFromArguments(call.arguments);
+    final instance =
+        utteranceId == null ? _activeInstance : _utteranceOwners[utteranceId];
+    try {
+      return await instance?.platformCallHandler(call);
+    } finally {
+      if (utteranceId != null &&
+          _isTerminalSpeechCallback(call.method) &&
+          identical(_utteranceOwners[utteranceId], instance)) {
+        _utteranceOwners.remove(utteranceId);
+      }
+    }
   }
+
+  static String? _utteranceIdFromArguments(dynamic arguments) {
+    if (arguments is! Map) {
+      return null;
+    }
+    final value = arguments['utteranceId'];
+    return value is String && value.isNotEmpty ? value : null;
+  }
+
+  static bool _isTerminalSpeechCallback(String method) =>
+      method == 'speak.onComplete' ||
+      method == 'speak.onCancel' ||
+      method == 'speak.onError';
 
   void _activatePlatformCallHandler() {
     _ensurePlatformCallHandlerInstalled();
@@ -362,14 +425,53 @@ class FlutterTts {
   }
 
   Future<dynamic> _invokeSpeechOperation(
-      String method, dynamic arguments) async {
+    String method,
+    dynamic arguments, {
+    String? utteranceId,
+  }) async {
     final previousInstance = _activeInstance;
+    final previousUtteranceOwner =
+        utteranceId == null ? null : _utteranceOwners[utteranceId];
     _activatePlatformCallHandler();
-    final result = await _channel.invokeMethod(method, arguments);
-    if (result == 0 && previousInstance != null && previousInstance != this) {
+    if (utteranceId != null) {
+      _utteranceOwners[utteranceId] = this;
+    }
+    try {
+      final nativeResult = await _channel.invokeMethod(method, arguments);
+      final result = _SpeechOperationResult.fromNative(nativeResult);
+      if (result.value == 0 && !result.wasAccepted) {
+        _releaseRejectedSpeechOperation(
+          previousInstance,
+          utteranceId,
+          previousUtteranceOwner,
+        );
+      }
+      return result.value;
+    } catch (_) {
+      _releaseRejectedSpeechOperation(
+        previousInstance,
+        utteranceId,
+        previousUtteranceOwner,
+      );
+      rethrow;
+    }
+  }
+
+  void _releaseRejectedSpeechOperation(
+    FlutterTts? previousInstance,
+    String? utteranceId,
+    FlutterTts? previousUtteranceOwner,
+  ) {
+    if (utteranceId != null && identical(_utteranceOwners[utteranceId], this)) {
+      if (previousUtteranceOwner == null) {
+        _utteranceOwners.remove(utteranceId);
+      } else {
+        _utteranceOwners[utteranceId] = previousUtteranceOwner;
+      }
+    }
+    if (identical(_activeInstance, this)) {
       _activeInstance = previousInstance;
     }
-    return result;
   }
 
   static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
@@ -395,14 +497,46 @@ class FlutterTts {
   }
 
   /// [Future] which invokes the platform specific method for speaking
-  Future<dynamic> speak(String text, {bool focus = false}) async {
+  /// [utteranceId] is returned with every speech callback when supplied.
+  ///
+  /// Use a globally unique non-empty value for every logical utterance. Do not
+  /// reuse an identifier for replacement speech, even immediately after
+  /// [stop], because a delayed terminal callback may still be in flight. Pass
+  /// the same identifier only when resuming that paused utterance.
+  Future<dynamic> speak(
+    String text, {
+    bool focus = false,
+    String? utteranceId,
+  }) async {
+    if (text.isEmpty) {
+      return 0;
+    }
+    if (utteranceId != null && utteranceId.isEmpty) {
+      throw ArgumentError.value(
+        utteranceId,
+        'utteranceId',
+        'Must not be empty',
+      );
+    }
     if (_isAndroid) {
-      return await _invokeSpeechOperation('speak', <String, dynamic>{
-        "text": text,
-        "focus": focus,
-      });
+      final arguments = <String, dynamic>{"text": text, "focus": focus};
+      if (utteranceId != null) {
+        arguments["utteranceId"] = utteranceId;
+      }
+      return await _invokeSpeechOperation(
+        'speak',
+        arguments,
+        utteranceId: utteranceId,
+      );
     } else {
-      return await _invokeSpeechOperation('speak', text);
+      final arguments = utteranceId == null
+          ? text
+          : <String, dynamic>{'text': text, 'utteranceId': utteranceId};
+      return await _invokeSpeechOperation(
+        'speak',
+        arguments,
+        utteranceId: utteranceId,
+      );
     }
   }
 
@@ -422,8 +556,11 @@ class FlutterTts {
 
   /// [Future] which invokes the platform specific method for synthesizeToFile
   /// ***Android, iOS, and macOS supported only***
-  Future<dynamic> synthesizeToFile(String text, String fileName,
-      [bool isFullPath = false]) async {
+  Future<dynamic> synthesizeToFile(
+    String text,
+    String fileName, [
+    bool isFullPath = false,
+  ]) async {
     if (!_isAndroid && !_isIOS && !_isMacOS) {
       _throwUnsupported('synthesizeToFile', 'Android, iOS, and macOS');
     }
@@ -469,10 +606,11 @@ class FlutterTts {
 
   /// [Future] which invokes the platform specific method for setting audio category
   /// ***Ios supported only***
-  Future<dynamic> setIosAudioCategory(IosTextToSpeechAudioCategory category,
-      List<IosTextToSpeechAudioCategoryOptions> options,
-      [IosTextToSpeechAudioMode mode =
-          IosTextToSpeechAudioMode.defaultMode]) async {
+  Future<dynamic> setIosAudioCategory(
+    IosTextToSpeechAudioCategory category,
+    List<IosTextToSpeechAudioCategoryOptions> options, [
+    IosTextToSpeechAudioMode mode = IosTextToSpeechAudioMode.defaultMode,
+  ]) async {
     const categoryToString = <IosTextToSpeechAudioCategory, String>{
       IosTextToSpeechAudioCategory.ambientSolo: iosAudioCategoryAmbientSolo,
       IosTextToSpeechAudioCategory.ambient: iosAudioCategoryAmbient,
@@ -510,18 +648,13 @@ class FlutterTts {
     if (!_isIOS) {
       _throwUnsupported('setIosAudioCategory', 'iOS');
     }
-    try {
-      return await _channel
-          .invokeMethod<dynamic>('setIosAudioCategory', <String, dynamic>{
-        iosAudioCategoryKey: categoryToString[category],
-        iosAudioCategoryOptionsKey:
-            options.map((o) => optionsToString[o]).toList(),
-        iosAudioModeKey: modeToString[mode],
-      });
-    } on PlatformException catch (e) {
-      print(
-          'setIosAudioCategory error, category: $category, mode: $mode, error: ${e.message}');
-    }
+    return await _channel
+        .invokeMethod<dynamic>('setIosAudioCategory', <String, dynamic>{
+      iosAudioCategoryKey: categoryToString[category],
+      iosAudioCategoryOptionsKey:
+          options.map((o) => optionsToString[o]).toList(),
+      iosAudioModeKey: modeToString[mode],
+    });
   }
 
   /// [Future] which invokes the platform specific method for setEngine
@@ -643,8 +776,9 @@ class FlutterTts {
     final normal = double.parse(validRange['normal'].toString());
     final max = double.parse(validRange['max'].toString());
     final platformStr = validRange['platform'].toString();
-    final platform =
-        TextToSpeechPlatform.values.firstWhere((e) => e.name == platformStr);
+    final platform = TextToSpeechPlatform.values.firstWhere(
+      (e) => e.name == platformStr,
+    );
 
     return SpeechRateValidRange(min, normal, max, platform);
   }
@@ -699,13 +833,80 @@ class FlutterTts {
     errorHandler = handler;
   }
 
+  /// Registers a start callback that also receives the caller-supplied
+  /// utterance identifier.
+  void setUtteranceStartHandler(UtteranceHandler callback) {
+    utteranceStartHandler = callback;
+  }
+
+  /// Registers a completion callback that also receives the caller-supplied
+  /// utterance identifier.
+  void setUtteranceCompletionHandler(UtteranceHandler callback) {
+    utteranceCompletionHandler = callback;
+  }
+
+  /// Registers a continue callback that also receives the caller-supplied
+  /// utterance identifier.
+  void setUtteranceContinueHandler(UtteranceHandler callback) {
+    utteranceContinueHandler = callback;
+  }
+
+  /// Registers a pause callback that also receives the caller-supplied
+  /// utterance identifier.
+  void setUtterancePauseHandler(UtteranceHandler callback) {
+    utterancePauseHandler = callback;
+  }
+
+  /// Registers a cancel callback that also receives the caller-supplied
+  /// utterance identifier.
+  void setUtteranceCancelHandler(UtteranceHandler callback) {
+    utteranceCancelHandler = callback;
+  }
+
+  /// Registers a progress callback that also receives the caller-supplied
+  /// utterance identifier.
+  void setUtteranceProgressHandler(UtteranceProgressHandler callback) {
+    utteranceProgressHandler = callback;
+  }
+
+  /// Registers an error callback that also receives the caller-supplied
+  /// utterance identifier.
+  void setUtteranceErrorHandler(UtteranceErrorHandler callback) {
+    utteranceErrorHandler = callback;
+  }
+
+  /// Releases callback ownership held by this instance.
+  ///
+  /// Call [stop] first if speech should also be stopped. Native speech is not
+  /// mutated by this synchronous cleanup method.
+  void dispose() {
+    _utteranceOwners.removeWhere((_, owner) => identical(owner, this));
+    if (identical(_activeInstance, this)) {
+      _activeInstance = null;
+    }
+    startHandler = null;
+    completionHandler = null;
+    pauseHandler = null;
+    continueHandler = null;
+    cancelHandler = null;
+    progressHandler = null;
+    errorHandler = null;
+    utteranceStartHandler = null;
+    utteranceCompletionHandler = null;
+    utterancePauseHandler = null;
+    utteranceContinueHandler = null;
+    utteranceCancelHandler = null;
+    utteranceProgressHandler = null;
+    utteranceErrorHandler = null;
+  }
+
   /// Platform listeners
   Future<dynamic> platformCallHandler(MethodCall call) async {
+    final utteranceId = _utteranceIdFromArguments(call.arguments);
     switch (call.method) {
       case "speak.onStart":
-        if (startHandler != null) {
-          startHandler!();
-        }
+        startHandler?.call();
+        utteranceStartHandler?.call(utteranceId);
         break;
 
       case "synth.onStart":
@@ -714,9 +915,8 @@ class FlutterTts {
         }
         break;
       case "speak.onComplete":
-        if (completionHandler != null) {
-          completionHandler!();
-        }
+        completionHandler?.call();
+        utteranceCompletionHandler?.call(utteranceId);
         break;
       case "synth.onComplete":
         if (completionHandler != null) {
@@ -724,33 +924,37 @@ class FlutterTts {
         }
         break;
       case "speak.onPause":
-        if (pauseHandler != null) {
-          pauseHandler!();
-        }
+        pauseHandler?.call();
+        utterancePauseHandler?.call(utteranceId);
         break;
       case "speak.onContinue":
-        if (continueHandler != null) {
-          continueHandler!();
-        }
+        continueHandler?.call();
+        utteranceContinueHandler?.call(utteranceId);
         break;
       case "speak.onCancel":
-        if (cancelHandler != null) {
-          cancelHandler!();
-        }
+        cancelHandler?.call();
+        utteranceCancelHandler?.call(utteranceId);
         break;
       case "speak.onError":
-        if (errorHandler != null) {
-          errorHandler!(call.arguments);
-        }
+        final message = _errorMessageFromArguments(call.arguments);
+        errorHandler?.call(message);
+        utteranceErrorHandler?.call(utteranceId, message);
         break;
       case 'speak.onProgress':
-        if (progressHandler != null) {
-          final args = call.arguments as Map<dynamic, dynamic>;
-          progressHandler!(
-            args['text'].toString(),
-            int.parse(args['start'].toString()),
-            int.parse(args['end'].toString()),
-            args['word'].toString(),
+        final progress = _progressFromArguments(call.arguments);
+        if (progress != null) {
+          progressHandler?.call(
+            progress.text,
+            progress.start,
+            progress.end,
+            progress.word,
+          );
+          utteranceProgressHandler?.call(
+            utteranceId,
+            progress.text,
+            progress.start,
+            progress.end,
+            progress.word,
           );
         }
         break;
@@ -764,10 +968,86 @@ class FlutterTts {
     }
   }
 
+  static dynamic _errorMessageFromArguments(dynamic arguments) {
+    if (arguments is Map && arguments.containsKey('message')) {
+      return arguments['message'];
+    }
+    return arguments;
+  }
+
+  static _ProgressEvent? _progressFromArguments(dynamic arguments) {
+    if (arguments is! Map) {
+      return null;
+    }
+    final text = arguments['text'];
+    final start = _intFromValue(arguments['start']);
+    final end = _intFromValue(arguments['end']);
+    if (text is! String || start == null || end == null) {
+      return null;
+    }
+    if (start < 0 || end <= start || end > text.length) {
+      return null;
+    }
+    if (_splitsSurrogatePair(text, start) || _splitsSurrogatePair(text, end)) {
+      return null;
+    }
+    final word = arguments['word'];
+    return _ProgressEvent(
+      text,
+      start,
+      end,
+      word is String ? word : text.substring(start, end),
+    );
+  }
+
+  static int? _intFromValue(dynamic value) {
+    if (value is int) {
+      return value;
+    }
+    return int.tryParse(value?.toString() ?? '');
+  }
+
+  static bool _splitsSurrogatePair(String text, int offset) {
+    if (offset <= 0 || offset >= text.length) {
+      return false;
+    }
+    final previous = text.codeUnitAt(offset - 1);
+    final current = text.codeUnitAt(offset);
+    return previous >= 0xD800 &&
+        previous <= 0xDBFF &&
+        current >= 0xDC00 &&
+        current <= 0xDFFF;
+  }
+
   Future<void> setAudioAttributesForNavigation() async {
     if (!_isAndroid) {
       _throwUnsupported('setAudioAttributesForNavigation', 'Android');
     }
     await _channel.invokeMethod('setAudioAttributesForNavigation');
+  }
+}
+
+class _ProgressEvent {
+  final String text;
+  final int start;
+  final int end;
+  final String word;
+
+  const _ProgressEvent(this.text, this.start, this.end, this.word);
+}
+
+class _SpeechOperationResult {
+  final dynamic value;
+  final bool wasAccepted;
+
+  const _SpeechOperationResult(this.value, this.wasAccepted);
+
+  factory _SpeechOperationResult.fromNative(dynamic result) {
+    if (result is Map &&
+        result['accepted'] == true &&
+        result.containsKey('value')) {
+      return _SpeechOperationResult(result['value'], true);
+    }
+    return _SpeechOperationResult(result, false);
   }
 }

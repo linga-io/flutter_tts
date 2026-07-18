@@ -18,11 +18,11 @@ A flutter text to speech plugin (Swift,Kotlin)
   - [x] set voice
 - [x] Android, iOS, Web, Windows & macOS
   - [x] is language available
-- [x] Android, iOS, Web
-  - [x] speech marks (requires iOS 7+, Android 26+, and default voice engine for web)
+- [x] Android, iOS, macOS, Web
+  - [x] speech marks (requires iOS 13+, Android 26+, and default voice engine for web)
 - [x] Android, iOS, macOS
   - [x] synthesize to file (requires iOS 13+)
-- [x] Android, iOS, Web, & Windows
+- [x] Android, iOS, macOS, Web, & Windows
   - [x] pause
 - [x] Android
   - [x] set silence
@@ -46,11 +46,11 @@ A flutter text to speech plugin (Swift,Kotlin)
 OSX version: 10.15
 ```
 
-[Example App](https://github.com/dlutton/flutter_tts/tree/macOS_app) from the macOS_app branch
+[Upstream macOS example](https://github.com/dlutton/flutter_tts/tree/macOS_app) from the macOS_app branch.
 
 ## Web
 
-[Website](https://dlutton.github.io/flutter_tts) from the example directory.
+[Upstream website](https://dlutton.github.io/flutter_tts) from the example directory.
 
 **Progress updates on Web**
 
@@ -58,24 +58,14 @@ Progress updates are only supported for native speech synthesis. Use the default
 
 ## Android
 
-Change the minimum Android sdk version to 21 (or higher) in your `android/app/build.gradle` file.
+The Android implementation requires API 24 or higher.
 
 ```groovy
-minSdkVersion 21
+minSdk = 24
 ```
 
-**Update the Kotlin Gradle Plugin Version**
-
-Change the version of the Kotlin Gradle plugin to `2.2.20`. <br>
-If your project was created with a version of Flutter before 3.19, go to the `android/build.gradle` file and update the `ext.kotlin_version`:
-```groovy
-ext.kotlin_version = '2.2.20'
-```
-
-Otherwise go to `android/settings.gradle` and update the version of the plugin `org.jetbrains.kotlin.android`:
-```groovy
-id "org.jetbrains.kotlin.android" version "2.2.20" apply false
-```
+The plugin supports AGP 9 built-in Kotlin and conditionally applies the Kotlin
+Gradle plugin when consumed by an AGP 8 application.
 
 
 Apps targeting Android 11 that use text-to-speech should
@@ -102,11 +92,11 @@ await flutterTts.pause()
 
 There's a known issue with integrating plugins that use Swift into a Flutter project created with the Objective-C template. [Flutter#16049](https://github.com/flutter/flutter/issues/16049)
 
-[Example](https://github.com/dlutton/flutter_tts/blob/master/example/lib/main.dart)
+[Example](https://github.com/linga-io/flutter_tts/blob/master/example/lib/main.dart)
 
 To use this plugin :
 
-- add the dependency to your [pubspec.yaml](https://github.com/dlutton/flutter_tts/blob/master/example/pubspec.yaml) file.
+- add the dependency to your [pubspec.yaml](https://github.com/linga-io/flutter_tts/blob/master/example/pubspec.yaml) file.
 
 ```yaml
   dependencies:
@@ -178,7 +168,7 @@ await flutterTts.setPitch(1.0);
 
 await flutterTts.isLanguageAvailable("en-US");
 
-// iOS, Android, Web, and Windows only
+// iOS, macOS, Android, Web, and Windows only
 //see the "Pausing on Android" section for more info
 await flutterTts.pause();
 
@@ -187,7 +177,7 @@ await flutterTts.pause();
 await flutterTts.synthesizeToFile("Hello World", Platform.isAndroid ? "tts.wav" : "tts.caf", false);
 
 // Each voice is a Map containing at least these keys: name, locale
-// - Windows (UWP voices) only: gender, identifier
+// - Windows desktop: gender, identifier
 // - iOS, macOS only: quality, gender, identifier
 // - Android only: quality, latency, network_required, features 
 List<Map> voices = await flutterTts.getVoices;
@@ -201,6 +191,35 @@ await flutterTts.setSharedInstance(true);
 
 // Android only
 await flutterTts.speak("Hello World", focus: true);
+
+// Optional: correlate every native callback with the exact speech request.
+// Use a globally unique ID for every logical utterance. Do not reuse an old ID
+// for replacement speech after stop; delayed native callbacks may still arrive.
+// Pass the same ID only when resuming that paused utterance.
+final utteranceId =
+    'chapter-4-sentence-2-${DateTime.now().microsecondsSinceEpoch}';
+flutterTts.setUtteranceStartHandler((id) {
+  if (id == utteranceId) {
+    // This request actually started.
+  }
+});
+flutterTts.setUtteranceProgressHandler(
+  (id, text, startOffset, endOffset, word) {
+    if (id == utteranceId) {
+      // Highlight [startOffset, endOffset] for this request only. Offsets are
+      // UTF-16 code units, matching Dart String substring indices.
+    }
+  },
+);
+flutterTts.setUtteranceCompletionHandler((id) {
+  if (id == utteranceId) {
+    // Advance to the next sentence.
+  }
+});
+await flutterTts.speak(
+  "Hello World",
+  utteranceId: utteranceId,
+);
 
 await flutterTts.setSilence(2000);
 
@@ -220,6 +239,8 @@ await flutterTts.setAudioAttributesForNavigation();
 ```
 
 ## Windows
+
+Version 5.0 supports Win32 desktop applications. UWP is not supported.
 
 Windows builds require `nuget.exe` on `PATH` so CMake can restore `Microsoft.Windows.CppWinRT`.
 
@@ -256,14 +277,14 @@ flutterTts.setCancelHandler(() {
   });
 });
 
-// Android, iOS and Web
+// Android, iOS, macOS, Web, and Windows
 flutterTts.setPauseHandler(() {
   setState(() {
     ttsState = TtsState.paused;
   });
 });
 
-flutterTts.setContinueHandler((msg) {
+flutterTts.setContinueHandler(() {
   setState(() {
     ttsState = TtsState.continued;
   });

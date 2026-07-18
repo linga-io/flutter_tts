@@ -1,5 +1,59 @@
 # ChangeLog
 
+## 5.0.0
+
+### Features
+
+- **All platforms:** Add optional caller-supplied utterance identifiers and
+  identifier-aware start, progress, pause, continue, cancel, completion, and
+  error handlers while retaining the existing callback API.
+- **Dart:** Add `dispose()` for explicitly releasing callback ownership.
+- **iOS/macOS:** Add Swift Package Manager manifests while retaining CocoaPods
+  support.
+
+### Fixes
+
+- **Dart:** Route tagged callbacks to the instance that submitted them, restore
+  ownership after rejected/throwing resume attempts, distinguish accepted
+  awaited cancellations from submission rejection, and reject malformed or
+  surrogate-splitting UTF-16 progress ranges.
+- **Android:** Scope speech results, callback identity, pause state, and audio
+  focus to native utterances; make stop/cancel cleanup independent of API 23's
+  `onStop`; reset progress on repeated pause/resume; align the advertised rate
+  range with accepted values; and harden engine-switch/detach cleanup.
+- **Android:** Publish scoped-storage synthesis output atomically on API 29+,
+  remove incomplete MediaStore rows, and copy API 29 output off the main thread.
+- **iOS/macOS:** Scope callbacks and awaited results to `AVSpeechUtterance`,
+  clean up all queued speech on stop, ignore orphan delegate events, validate
+  progress ranges, marshal callbacks to the main thread, guard speech-only
+  pause, and make voice-quality selection deterministic.
+- **iOS/macOS:** Write synthesis output transactionally and atomically so
+  cancellation, write errors, or zero-audio completion cannot leave a partial
+  file or replace a valid existing destination.
+- **iOS:** Release the shared audio session after the final completion,
+  cancellation, or explicit stop.
+- **Web:** Use one immutable browser utterance per request, cancel speech that
+  has not emitted `onStart` yet, ignore stale events, fix await-mode rejection,
+  preserve long-speech keepalive after resume, and use browser boundary lengths.
+- **Windows:** Move asynchronous WinRT/SAPI state outside plugin lifetime,
+  dispatch all callbacks on the platform thread, handle media failures and
+  failed wakeups, harden constructor rollback, reject idle pause, and prevent
+  stale completion from claiming a replacement request.
+
+### Behavior changes
+
+- Empty speech is rejected consistently before invoking a platform engine.
+- Tagged paused speech resumes only when the same utterance identifier is used.
+- Relative synthesis filenames reject NULs, traversal, and path separators;
+  explicit full paths remain supported.
+- `setIosAudioCategory` now propagates platform errors instead of printing and
+  returning `null`.
+- The minimum native targets are now Android 24 and iOS 13. Dart 3.4 and
+  Flutter 3.22 remain supported.
+- Android supports AGP 7/8 Kotlin Gradle Plugin hosts and AGP 9 built-in Kotlin.
+- Windows support is limited to Win32 desktop; the unvalidated UWP variant is
+  no longer advertised.
+
 ## 4.2.5
 
 ### Fixes

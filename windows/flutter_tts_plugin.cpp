@@ -878,7 +878,7 @@ namespace {
 		requestGeneration = 0;
 		activeRequestGeneration = 0;
 		speakResult = FlutterResult();
-		const auto* view = registrar->GetView();
+		auto* const view = registrar->GetView();
 		const HWND viewWindow =
 			view != nullptr ? view->GetNativeWindow() : nullptr;
 		asyncEvents = std::make_shared<WinRtEventQueue>(viewWindow);
@@ -1017,7 +1017,7 @@ namespace {
 		speakResult = NULL;
 		pVoice = NULL;
 		pitch = 1.0;
-		const auto* view = registrar->GetView();
+		auto* const view = registrar->GetView();
 		const HWND viewWindow =
 			view != nullptr ? view->GetNativeWindow() : nullptr;
 		asyncEvents = std::make_shared<SapiEventQueue>(viewWindow);

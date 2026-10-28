@@ -1019,7 +1019,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     }
 
     private fun setVoice(voice: HashMap<String?, String>, result: Result) {
-        for (ttsVoice in tts!!.voices) {
+        // TextToSpeech.getVoices() is null while the engine is unbound (its service died): no voice to set.
+        for (ttsVoice in tts?.voices.orEmpty()) {
             if (ttsVoice.name == voice["name"] && ttsVoice.locale
                     .toLanguageTag() == voice["locale"]
             ) {
@@ -1063,6 +1064,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         }
     }
 
+    // Answers null, not an empty list, while the engine is unbound: the app reads that as an engine that
+    // lost its service and recreates it.
     private fun getVoices(result: Result) {
         val voices = ArrayList<HashMap<String, String>>()
         try {

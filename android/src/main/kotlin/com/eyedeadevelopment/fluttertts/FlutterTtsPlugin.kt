@@ -77,6 +77,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     private val synthesisRequests = ConcurrentHashMap<String, SynthesisRequest>()
     private val synthesisOutputs = ConcurrentHashMap<String, SynthesisOutput>()
     private var synthesisIoExecutor: ExecutorService? = null
+    private var engineQueryExecutor: ExecutorService? = null
     private var bundle: Bundle? = null
     private var silencems = 0
     private var lastProgress = 0
@@ -120,6 +121,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         methodChannel!!.setMethodCallHandler(this)
         handler = Handler(Looper.getMainLooper())
         synthesisIoExecutor = Executors.newSingleThreadExecutor()
+        engineQueryExecutor = Executors.newSingleThreadExecutor()
         bundle = Bundle()
         ttsStatus = null
         try {
@@ -154,6 +156,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         discardAllSynthesisOutputs()
         synthesisIoExecutor?.shutdownNow()
         synthesisIoExecutor = null
+        engineQueryExecutor?.shutdownNow()
+        engineQueryExecutor = null
         releaseAudioFocus()
         audioFocusRequest = null
         audioManager = null
@@ -513,19 +517,11 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         }
     }
 
+    // No default language here: the framework already pins the client default language at setup, and
+    // reading defaultVoice and setting the language each copy the engine's whole voice list over IPC on the
+    // main thread, the ANRs in Linga Sentry LINGA-6N8 (getDefaultVoice) and LINGA-6N0 (setLanguage).
     private fun configureSuccessfulTts() {
-        val textToSpeech = tts ?: return
-        textToSpeech.setOnUtteranceProgressListener(utteranceProgressListener)
-        try {
-            val locale: Locale = textToSpeech.defaultVoice.locale
-            if (isLanguageAvailable(locale)) {
-                textToSpeech.language = locale
-            }
-        } catch (e: NullPointerException) {
-            Log.e(tag, "getDefaultLocale: " + e.message)
-        } catch (e: IllegalArgumentException) {
-            Log.e(tag, "getDefaultLocale: " + e.message)
-        }
+        tts?.setOnUtteranceProgressListener(utteranceProgressListener)
     }
 
     private fun createOnInitListener(
@@ -1026,7 +1022,9 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     }
 
     // An engine that never finished initializing may still hold its lock in a blocking setup call into
-    // the engine service: stop() or shutdown() on the main thread would wait for it (ANR).
+    // the engine service: stop() or shutdown() on the main thread would wait for it (ANR). On a ready engine
+    // the lock is held only for single framework calls, now including a getVoices read off the main thread,
+    // which main waits for no longer than it took when it ran there.
     private fun shutDownEngine(textToSpeech: TextToSpeech?, ready: Boolean) {
         if (textToSpeech == null) return
         if (ready) {
@@ -1101,21 +1099,53 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     }
 
     // Answers null, not an empty list, while the engine is unbound: the app reads that as an engine that
-    // lost its service and recreates it.
+    // lost its service and recreates it. The voice list crosses IPC in full, which can outlast the ANR
+    // limit on a slow device, so it is read off the main thread.
     private fun getVoices(result: Result) {
-        val voices = ArrayList<HashMap<String, String>>()
+        val textToSpeech = tts
+        val executor = engineQueryExecutor
+        val mainHandler = handler
+        if (textToSpeech == null || executor == null || mainHandler == null) {
+            result.success(null)
+            return
+        }
+        val generation = lifecycleGeneration
         try {
-            for (voice in tts!!.voices) {
-                val voiceMap = HashMap<String, String>()
-                readVoiceProperties(voiceMap, voice)
-                voices.add(voiceMap)
+            executor.execute {
+                try {
+                    val voices = readVoices(textToSpeech)
+                    mainHandler.post {
+                        // A setEngine overtook the read and shut the old engine down: its null would read as
+                        // a lost engine, so ask the current one. A list it did return still answers its caller.
+                        if (voices == null && generation != lifecycleGeneration) {
+                            onMethodCall(MethodCall("getVoices", null), result)
+                        } else {
+                            result.success(voices)
+                        }
+                    }
+                } catch (error: RuntimeException) {
+                    mainHandler.post {
+                        if (generation != lifecycleGeneration) {
+                            onMethodCall(MethodCall("getVoices", null), result)
+                        } else {
+                            result.error("error", error.message, null)
+                        }
+                    }
+                }
             }
-            result.success(voices)
-        } catch (e: NullPointerException) {
-            Log.d(tag, "getVoices: " + e.message)
+        } catch (error: RuntimeException) {
+            Log.e(tag, "Failed scheduling getVoices", error)
             result.success(null)
         }
     }
+
+    private fun readVoices(textToSpeech: TextToSpeech): List<Map<String, String>>? =
+        try {
+            textToSpeech.voices?.map { voice -> HashMap<String, String>().also { readVoiceProperties(it, voice) } }
+        } catch (e: NullPointerException) {
+            Log.d(tag, "getVoices: " + e.message)
+            null
+        }
 
     private fun getLanguages(result: Result) {
         val locales = ArrayList<String>()

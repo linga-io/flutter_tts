@@ -99,6 +99,10 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     companion object {
         private const val SILENCE_PREFIX = "SIL_"
         private const val SYNTHESIZE_TO_FILE_PREFIX = "STF_"
+
+        // An engine whose service never finishes connecting never calls onInit, and every call queues
+        // behind it. Android itself declares a foreground service hung after 20 s.
+        private const val ENGINE_INIT_TIMEOUT_MS = 20_000L
     }
 
     private enum class SpeakStatus {
@@ -135,7 +139,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         detached = true
         lifecycleGeneration += 1
-        tts?.stop()
+        val engineReady = ttsStatus == TextToSpeech.SUCCESS
+        if (engineReady) tts?.stop()
         notifyLifecycleSpeechCancellations()
         cancelAllSpeechRequests(clearRequests = true)
         cancelAllSynthesisRequests(clearRequests = true)
@@ -152,7 +157,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         releaseAudioFocus()
         audioFocusRequest = null
         audioManager = null
-        tts?.shutdown()
+        shutDownEngine(tts, engineReady)
         tts = null
         ttsStatus = null
         context = null
@@ -527,30 +532,41 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         reportResult: Boolean,
         generation: Int
     ): TextToSpeech.OnInitListener {
+        // Fail the waiting calls instead; a late onInit still brings the engine up unless it was replaced.
+        handler?.postDelayed({
+            if (!detached && generation == lifecycleGeneration && ttsStatus == null) {
+                Log.e(tag, "TextToSpeech engine did not initialize within $ENGINE_INIT_TIMEOUT_MS ms")
+                completeInitialization(TextToSpeech.ERROR, reportResult)
+            }
+        }, ENGINE_INIT_TIMEOUT_MS)
         return TextToSpeech.OnInitListener { status ->
             val mainHandler = handler ?: return@OnInitListener
             mainHandler.post {
                 if (detached || generation != lifecycleGeneration) return@post
-                ttsStatus = status
-                if (status == TextToSpeech.SUCCESS) {
-                    configureSuccessfulTts()
-                    if (reportResult) resolveResult(engineResult, 1)
-                    engineResult = null
-                    drainPendingMethodCalls()
-                } else {
-                    val message = "Failed to initialize TextToSpeech with status: $status"
-                    Log.e(tag, message)
-                    if (reportResult) {
-                        try {
-                            engineResult?.error("TtsError", message, null)
-                        } catch (error: IllegalStateException) {
-                            Log.d(tag, "Engine result was already completed: ${error.message}")
-                        }
-                    }
-                    engineResult = null
-                    failPendingMethodCalls(message)
+                completeInitialization(status, reportResult)
+            }
+        }
+    }
+
+    private fun completeInitialization(status: Int, reportResult: Boolean) {
+        ttsStatus = status
+        if (status == TextToSpeech.SUCCESS) {
+            configureSuccessfulTts()
+            if (reportResult) resolveResult(engineResult, 1)
+            engineResult = null
+            drainPendingMethodCalls()
+        } else {
+            val message = "Failed to initialize TextToSpeech with status: $status"
+            Log.e(tag, message)
+            if (reportResult) {
+                try {
+                    engineResult?.error("TtsError", message, null)
+                } catch (error: IllegalStateException) {
+                    Log.d(tag, "Engine result was already completed: ${error.message}")
                 }
             }
+            engineResult = null
+            failPendingMethodCalls(message)
         }
     }
 
@@ -982,13 +998,14 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             result.error("TtsError", "TextToSpeech plugin is detached", null)
             return
         }
-        tts?.stop()
+        val engineReady = ttsStatus == TextToSpeech.SUCCESS
+        if (engineReady) tts?.stop()
         notifyLifecycleSpeechCancellations()
         cancelAllSpeechRequests(clearRequests = true)
         cancelAllSynthesisRequests(clearRequests = true)
         discardAllSynthesisOutputs()
         releaseAudioFocus()
-        tts?.shutdown()
+        shutDownEngine(tts, engineReady)
         tts = null
 
         ttsStatus = null
@@ -1006,6 +1023,25 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             engineResult = null
             result.error("TtsError", "Failed to create TextToSpeech engine", error.message)
         }
+    }
+
+    // An engine that never finished initializing may still hold its lock in a blocking setup call into
+    // the engine service: stop() or shutdown() on the main thread would wait for it (ANR).
+    private fun shutDownEngine(textToSpeech: TextToSpeech?, ready: Boolean) {
+        if (textToSpeech == null) return
+        if (ready) {
+            textToSpeech.shutdown()
+            return
+        }
+        // ponytail: one parked thread per abandoned engine until its service answers; an executor if this repeats.
+        Thread({
+            try {
+                textToSpeech.shutdown()
+            } catch (error: RuntimeException) {
+                // Unbinding a connection Android already dropped throws; off the method channel it would crash.
+                Log.w(tag, "Shutting down an uninitialized engine failed: ${error.message}")
+            }
+        }, "TtsEngineShutdown").start()
     }
 
     private fun setLanguage(language: String?, result: Result) {

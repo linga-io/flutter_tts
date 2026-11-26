@@ -285,8 +285,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             val request = synthesisRequests.remove(utteranceId) ?: return
             finalizeSynthesisOutput(utteranceId, publish = false)
             invokeMethod("synth.onError", "Synthesize to file was stopped")
-            resolveResult(request.awaitedResult, 0)
-            request.awaitedResult = null
+            resolveSynthesisAfterCallback(request, 0)
             return
         }
         val request = speechRequests.remove(utteranceId) ?: return
@@ -356,8 +355,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             val request = synthesisRequests.remove(utteranceId) ?: return
             finalizeSynthesisOutput(utteranceId, publish = false)
             invokeMethod("synth.onError", "$error (synth)")
-            resolveResult(request.awaitedResult, 0)
-            request.awaitedResult = null
+            resolveSynthesisAfterCallback(request, 0)
             return
         }
         val request = speechRequests.remove(utteranceId) ?: return
@@ -461,16 +459,23 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         }
     }
 
-    // Every synthesis ends with its callback before its awaited result: Dart routes synth.* callbacks to the
-    // instance that started the synthesis only until that call answers.
     private fun cancelSynthesisRequests(utteranceIds: Collection<String>) {
         for (utteranceId in utteranceIds) {
             val request = synthesisRequests.remove(utteranceId) ?: continue
             finalizeSynthesisOutput(utteranceId, publish = false)
             invokeMethod("synth.onError", "Synthesize to file was stopped")
-            resolveResult(request.awaitedResult, 0)
-            request.awaitedResult = null
+            resolveSynthesisAfterCallback(request, 0)
         }
+    }
+
+    // Every synthesis ends with its callback before its awaited result: Dart routes synth.* callbacks to the
+    // instance that started the synthesis only until that call answers. invokeMethod posts the callback to the
+    // main looper while an answer given at once leaves at once, ahead of it; posted on the same looper after the
+    // callback, the answer reaches Dart behind it.
+    private fun resolveSynthesisAfterCallback(request: SynthesisRequest, value: Int) {
+        val result = request.awaitedResult ?: return
+        request.awaitedResult = null
+        if (handler?.post { resolveResult(result, value) } != true) resolveResult(result, value)
     }
 
     private fun cancelAllSpeechRequests(clearRequests: Boolean) {
@@ -1392,8 +1397,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         } else {
             invokeMethod("synth.onError", "Failed finalizing synthesized audio file")
         }
-        resolveResult(request.awaitedResult, if (finalization.succeeded) 1 else 0)
-        request.awaitedResult = null
+        resolveSynthesisAfterCallback(request, if (finalization.succeeded) 1 else 0)
     }
 
     private fun finalizeCopiedSynthesisOutput(utteranceId: String) {

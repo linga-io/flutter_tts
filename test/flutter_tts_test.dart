@@ -652,9 +652,14 @@ void main() {
     ]);
   });
 
+  // Dart's side only: given the order the Android plugin keeps (it posts the
+  // answer behind the callback on the main looper), the callback reaches the
+  // instance that started the synthesis. The plugin's own order has no test
+  // here.
   test(
-      'a failed synthesis reports its error to its own instance before it '
-      'answers 0, then hands synth callbacks back', () async {
+      'a synth.onError that arrives before the awaited answer 0 reaches the '
+      'instance that started the synthesis, then synth callbacks go back',
+      () async {
     const channel = MethodChannel('flutter_tts');
     final speaker = FlutterTts();
     final synthesizer = FlutterTts();
@@ -669,7 +674,7 @@ void main() {
         case 1:
           return 1;
         case 2:
-          // The plugin's order with awaitSynthCompletion(true): the
+          // The order the plugin keeps with awaitSynthCompletion(true): the
           // callback, then the awaited result.
           await sendPlatformCallback(
             const MethodCall('synth.onError', 'Synthesize to file was stopped'),

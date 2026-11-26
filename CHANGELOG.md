@@ -13,6 +13,9 @@
   started the synthesis still owns `synth.*` callbacks (answered at once, the
   reply overtook the posted callback); `setEngine` ends every synthesis it
   drops with `synth.onError` instead of leaving it silent.
+- **Android:** the order of `onRangeStart`'s arguments for a synthesis to file
+  is decided by its first word that fits the text, not by one that fits
+  neither order.
 
 ## 5.0.0
 

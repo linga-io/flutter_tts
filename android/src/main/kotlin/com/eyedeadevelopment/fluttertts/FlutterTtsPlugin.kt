@@ -54,8 +54,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         var awaitedResult: Result?,
         // From onBeginSynthesis: the rate of the written audio, which word frames count in.
         var sampleRate: Int = 0,
-        // Whether onRangeStart hands this synthesis its frame first; decided by its first word, so one file never
-        // mixes the two orders.
+        // Whether onRangeStart hands this synthesis its frame first; decided by its first valid word, so one file
+        // never mixes the two orders.
         var frameFirst: Boolean? = null
     )
 
@@ -310,15 +310,15 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         // Android's FileSynthesisCallback.rangeStart(markerInFrames, start, end) hands its arguments to a
         // dispatcher that takes (start, end, frame), so for a synthesis to file the frame comes first (seen with
         // Google TTS on Android 17: 360, 1, 4 for the word at 1..4). Use that order; the documented one only when
-        // nothing else fits the text.
-        val swapped = request.frameFirst
-            ?: (startAt >= 0 && endAt >= 0 && endAt < frame && frame <= length).also { request.frameFirst = it }
+        // nothing else fits the text. The first word that fits the order guessed for it decides it.
+        val swapped = request.frameFirst ?: (startAt >= 0 && endAt >= 0 && endAt < frame && frame <= length)
         val wordStart = if (swapped) endAt else startAt
         val wordEnd = if (swapped) frame else endAt
         val wordFrame = if (swapped) startAt else frame
         if (wordStart < 0 || wordEnd <= wordStart || wordEnd > length || wordFrame < 0 || request.sampleRate <= 0) {
             return
         }
+        request.frameFirst = swapped
         val data = HashMap<String, Int>()
         data["start"] = wordStart
         data["end"] = wordEnd

@@ -50,7 +50,10 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
     )
 
     private data class SynthesisRequest(
-        var awaitedResult: Result?
+        val text: String,
+        var awaitedResult: Result?,
+        // From onBeginSynthesis: the rate of the written audio, which word frames count in.
+        var sampleRate: Int = 0
     )
 
     private data class SynthesisOutput(
@@ -187,11 +190,20 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 }
             }
 
+            override fun onBeginSynthesis(
+                utteranceId: String,
+                sampleRateInHz: Int,
+                audioFormat: Int,
+                channelCount: Int
+            ) {
+                dispatchUtteranceCallback { handleSynthesisBegin(utteranceId, sampleRateInHz) }
+            }
+
             // Requires Android 26 or later
             override fun onRangeStart(utteranceId: String, startAt: Int, endAt: Int, frame: Int) {
                 super.onRangeStart(utteranceId, startAt, endAt, frame)
                 dispatchUtteranceCallback {
-                    handleUtteranceProgress(utteranceId, startAt, endAt)
+                    handleUtteranceProgress(utteranceId, startAt, endAt, frame)
                 }
             }
 
@@ -283,10 +295,41 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         if (request.focusRequested) releaseAudioFocus(utteranceId)
     }
 
-    private fun handleUtteranceProgress(utteranceId: String, startAt: Int, endAt: Int) {
-        if (utteranceId.startsWith(SILENCE_PREFIX) ||
-            utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)
-        ) return
+    private fun handleSynthesisBegin(utteranceId: String, sampleRate: Int) {
+        if (!utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) return
+        synthesisRequests[utteranceId]?.sampleRate = sampleRate
+    }
+
+    // A word of a synthesis to file, with the audio frame where it is spoken: the app plays the file, so it
+    // times the word itself. Engines that report no ranges while synthesizing never get here.
+    private fun handleSynthesisProgress(utteranceId: String, startAt: Int, endAt: Int, frame: Int) {
+        val request = synthesisRequests[utteranceId] ?: return
+        val length = request.text.length
+        // Android's FileSynthesisCallback.rangeStart(markerInFrames, start, end) hands its arguments to a
+        // dispatcher that takes (start, end, frame), so for a synthesis to file the frame comes first (seen with
+        // Google TTS on Android 17: 360, 1, 4 for the word at 1..4). Use that order; the documented one only when
+        // nothing else fits the text.
+        val swapped = startAt >= 0 && endAt >= 0 && endAt < frame && frame <= length
+        val wordStart = if (swapped) endAt else startAt
+        val wordEnd = if (swapped) frame else endAt
+        val wordFrame = if (swapped) startAt else frame
+        if (wordStart < 0 || wordEnd <= wordStart || wordEnd > length || wordFrame < 0 || request.sampleRate <= 0) {
+            return
+        }
+        val data = HashMap<String, Int>()
+        data["start"] = wordStart
+        data["end"] = wordEnd
+        data["frame"] = wordFrame
+        data["sampleRate"] = request.sampleRate
+        invokeMethod("synth.onProgress", data)
+    }
+
+    private fun handleUtteranceProgress(utteranceId: String, startAt: Int, endAt: Int, frame: Int) {
+        if (utteranceId.startsWith(SILENCE_PREFIX)) return
+        if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
+            handleSynthesisProgress(utteranceId, startAt, endAt, frame)
+            return
+        }
         val request = speechRequests[utteranceId] ?: return
         val safeStart = startAt.coerceIn(0, request.text.length)
         val safeEnd = endAt.coerceIn(safeStart, request.text.length)
@@ -755,6 +798,7 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
                 val utteranceId = SYNTHESIZE_TO_FILE_PREFIX + UUID.randomUUID().toString()
                 val shouldAwaitCompletion = awaitSynthCompletion
                 synthesisRequests[utteranceId] = SynthesisRequest(
+                    text = text,
                     awaitedResult = if (shouldAwaitCompletion) result else null
                 )
                 val synthesizeResult = synthesizeToFile(

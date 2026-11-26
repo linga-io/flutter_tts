@@ -1,5 +1,13 @@
 # ChangeLog
 
+## Unreleased
+
+- **Android:** `setSynthesisProgressHandler` receives each word range of a
+  `synthesizeToFile` with the audio frame it is spoken at and the file's sample
+  rate, so an app that plays the file can time its words.
+- **Dart:** `synth.*` callbacks go to the instance that started the synthesis;
+  a synthesis no longer takes the speech callbacks of another instance.
+
 ## 5.0.0
 
 ### Features

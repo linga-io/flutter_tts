@@ -29,6 +29,19 @@ typedef UtteranceProgressHandler = void Function(
   String word,
 );
 
+/// Receives a word range of text being synthesized to a file, with [frame], the
+/// audio frame where the engine starts speaking it, and the file's
+/// [sampleRate]: `frame / sampleRate` is its time in seconds in the file.
+///
+/// [start] and [end] are UTF-16 code-unit offsets into the synthesized text.
+/// Engines that report no ranges during synthesis never call it.
+typedef SynthesisProgressHandler = void Function(
+  int start,
+  int end,
+  int frame,
+  int sampleRate,
+);
+
 const String iosAudioCategoryOptionsKey = 'iosAudioCategoryOptionsKey';
 const String iosAudioCategoryKey = 'iosAudioCategoryKey';
 const String iosAudioModeKey = 'iosAudioModeKey';
@@ -359,6 +372,11 @@ class SpeechRateValidRange {
 class FlutterTts {
   static const MethodChannel _channel = MethodChannel('flutter_tts');
   static FlutterTts? _activeInstance;
+
+  /// Receives the `synth.*` callbacks, which carry no utterance ID. Kept apart
+  /// from [_activeInstance] so a synthesis to file never takes the callbacks of
+  /// speech another instance is playing.
+  static FlutterTts? _synthesisOwner;
   static bool _platformCallHandlerInstalled = false;
   static final Map<String, FlutterTts> _utteranceOwners =
       <String, FlutterTts>{};
@@ -377,6 +395,7 @@ class FlutterTts {
   UtteranceHandler? utteranceCancelHandler;
   UtteranceProgressHandler? utteranceProgressHandler;
   UtteranceErrorHandler? utteranceErrorHandler;
+  SynthesisProgressHandler? synthesisProgressHandler;
 
   FlutterTts() {
     _ensurePlatformCallHandlerInstalled();
@@ -393,8 +412,11 @@ class FlutterTts {
 
   static Future<dynamic> _platformCallHandler(MethodCall call) async {
     final utteranceId = _utteranceIdFromArguments(call.arguments);
-    final instance =
-        utteranceId == null ? _activeInstance : _utteranceOwners[utteranceId];
+    final instance = call.method.startsWith('synth.')
+        ? _synthesisOwner ?? _activeInstance
+        : utteranceId == null
+            ? _activeInstance
+            : _utteranceOwners[utteranceId];
     try {
       return await instance?.platformCallHandler(call);
     } finally {
@@ -564,11 +586,23 @@ class FlutterTts {
     if (!_isAndroid && !_isIOS && !_isMacOS) {
       _throwUnsupported('synthesizeToFile', 'Android, iOS, and macOS');
     }
-    return _invokeSpeechOperation('synthesizeToFile', <String, dynamic>{
-      "text": text,
-      "fileName": fileName,
-      "isFullPath": isFullPath,
-    });
+    final previousOwner = _synthesisOwner;
+    _ensurePlatformCallHandlerInstalled();
+    _synthesisOwner = this;
+    try {
+      final result = await _channel.invokeMethod('synthesizeToFile', {
+        "text": text,
+        "fileName": fileName,
+        "isFullPath": isFullPath,
+      });
+      if (result == 0 && identical(_synthesisOwner, this)) {
+        _synthesisOwner = previousOwner;
+      }
+      return result;
+    } catch (_) {
+      if (identical(_synthesisOwner, this)) _synthesisOwner = previousOwner;
+      rethrow;
+    }
   }
 
   /// [Future] which invokes the platform specific method for setLanguage
@@ -875,6 +909,12 @@ class FlutterTts {
     utteranceErrorHandler = callback;
   }
 
+  /// Registers a callback for the word ranges of a synthesis to file, with
+  /// their audio frames. ***Android supported only***
+  void setSynthesisProgressHandler(SynthesisProgressHandler callback) {
+    synthesisProgressHandler = callback;
+  }
+
   /// Releases callback ownership held by this instance.
   ///
   /// Call [stop] first if speech should also be stopped. Native speech is not
@@ -883,6 +923,9 @@ class FlutterTts {
     _utteranceOwners.removeWhere((_, owner) => identical(owner, this));
     if (identical(_activeInstance, this)) {
       _activeInstance = null;
+    }
+    if (identical(_synthesisOwner, this)) {
+      _synthesisOwner = null;
     }
     startHandler = null;
     completionHandler = null;
@@ -898,6 +941,7 @@ class FlutterTts {
     utteranceCancelHandler = null;
     utteranceProgressHandler = null;
     utteranceErrorHandler = null;
+    synthesisProgressHandler = null;
   }
 
   /// Platform listeners
@@ -958,6 +1002,17 @@ class FlutterTts {
           );
         }
         break;
+      case 'synth.onProgress':
+        final progress = _synthesisProgressFromArguments(call.arguments);
+        if (progress != null) {
+          synthesisProgressHandler?.call(
+            progress[0],
+            progress[1],
+            progress[2],
+            progress[3],
+          );
+        }
+        break;
       case "synth.onError":
         if (errorHandler != null) {
           errorHandler!(call.arguments);
@@ -998,6 +1053,28 @@ class FlutterTts {
       end,
       word is String ? word : text.substring(start, end),
     );
+  }
+
+  /// [start, end, frame, sampleRate], or null when any is missing or invalid.
+  static List<int>? _synthesisProgressFromArguments(dynamic arguments) {
+    if (arguments is! Map) {
+      return null;
+    }
+    final values = [
+      for (final key in const ['start', 'end', 'frame', 'sampleRate'])
+        _intFromValue(arguments[key]),
+    ];
+    if (values.contains(null)) {
+      return null;
+    }
+    final progress = values.cast<int>();
+    if (progress[0] < 0 ||
+        progress[1] <= progress[0] ||
+        progress[2] < 0 ||
+        progress[3] <= 0) {
+      return null;
+    }
+    return progress;
   }
 
   static int? _intFromValue(dynamic value) {

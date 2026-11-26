@@ -7,6 +7,10 @@
   rate, so an app that plays the file can time its words.
 - **Dart:** `synth.*` callbacks go to the instance that started the synthesis;
   a synthesis no longer takes the speech callbacks of another instance.
+- **Android:** a synthesis to file sends its `synth.onComplete` or
+  `synth.onError` before it answers an awaited `synthesizeToFile`, so the
+  callback reaches the instance that started it; `setEngine` ends every
+  synthesis it drops with `synth.onError` instead of leaving it silent.
 
 ## 5.0.0
 

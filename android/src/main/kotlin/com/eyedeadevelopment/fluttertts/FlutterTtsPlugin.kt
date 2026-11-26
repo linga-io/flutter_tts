@@ -281,9 +281,9 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
             val request = synthesisRequests.remove(utteranceId) ?: return
             finalizeSynthesisOutput(utteranceId, publish = false)
+            invokeMethod("synth.onError", "Synthesize to file was stopped")
             resolveResult(request.awaitedResult, 0)
             request.awaitedResult = null
-            invokeMethod("synth.onError", "Synthesize to file was stopped")
             return
         }
         val request = speechRequests.remove(utteranceId) ?: return
@@ -351,9 +351,9 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
             val request = synthesisRequests.remove(utteranceId) ?: return
             finalizeSynthesisOutput(utteranceId, publish = false)
+            invokeMethod("synth.onError", "$error (synth)")
             resolveResult(request.awaitedResult, 0)
             request.awaitedResult = null
-            invokeMethod("synth.onError", "$error (synth)")
             return
         }
         val request = speechRequests.remove(utteranceId) ?: return
@@ -457,13 +457,15 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         }
     }
 
+    // Every synthesis ends with its callback before its awaited result: Dart routes synth.* callbacks to the
+    // instance that started the synthesis only until that call answers.
     private fun cancelSynthesisRequests(utteranceIds: Collection<String>) {
         for (utteranceId in utteranceIds) {
             val request = synthesisRequests.remove(utteranceId) ?: continue
             finalizeSynthesisOutput(utteranceId, publish = false)
+            invokeMethod("synth.onError", "Synthesize to file was stopped")
             resolveResult(request.awaitedResult, 0)
             request.awaitedResult = null
-            invokeMethod("synth.onError", "Synthesize to file was stopped")
         }
     }
 
@@ -1042,7 +1044,8 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
         if (engineReady) tts?.stop()
         notifyLifecycleSpeechCancellations()
         cancelAllSpeechRequests(clearRequests = true)
-        cancelAllSynthesisRequests(clearRequests = true)
+        // Each ends with synth.onError: a caller waiting for the callback would otherwise wait forever.
+        cancelSynthesisRequests(synthesisRequests.keys.toList())
         discardAllSynthesisOutputs()
         releaseAudioFocus()
         shutDownEngine(tts, engineReady)
@@ -1379,15 +1382,14 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             finalization.publishedOutput?.let { deleteMediaStoreOutput(it) }
             return
         }
-        val value = if (finalization.succeeded) 1 else 0
-        resolveResult(request.awaitedResult, value)
-        request.awaitedResult = null
         if (finalization.succeeded) {
             Log.d(tag, "Utterance ID has completed: $utteranceId")
             invokeMethod("synth.onComplete", true)
         } else {
             invokeMethod("synth.onError", "Failed finalizing synthesized audio file")
         }
+        resolveResult(request.awaitedResult, if (finalization.succeeded) 1 else 0)
+        request.awaitedResult = null
     }
 
     private fun finalizeCopiedSynthesisOutput(utteranceId: String) {

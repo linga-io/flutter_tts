@@ -651,4 +651,53 @@ void main() {
       'synth error',
     ]);
   });
+
+  test(
+      'a failed synthesis reports its error to its own instance before it '
+      'answers 0, then hands synth callbacks back', () async {
+    const channel = MethodChannel('flutter_tts');
+    final speaker = FlutterTts();
+    final synthesizer = FlutterTts();
+    final events = <String>[];
+    speaker.setErrorHandler((message) => events.add('speaker $message'));
+    synthesizer.setErrorHandler((message) => events.add('synth $message'));
+    var syntheses = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      if (call.method != 'synthesizeToFile') return 1;
+      switch (++syntheses) {
+        case 1:
+          return 1;
+        case 2:
+          // The plugin's order with awaitSynthCompletion(true): the
+          // callback, then the awaited result.
+          await sendPlatformCallback(
+            const MethodCall('synth.onError', 'Synthesize to file was stopped'),
+          );
+          return 0;
+        default:
+          // Busy with the first synthesis: no callback follows.
+          return 0;
+      }
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+    expect(await speaker.synthesizeToFile('one', '/tmp/one.wav', true), 1);
+    expect(
+      await synthesizer.synthesizeToFile('two', '/tmp/two.wav', true),
+      0,
+    );
+    expect(
+      await synthesizer.synthesizeToFile('three', '/tmp/three.wav', true),
+      0,
+    );
+    await sendPlatformCallback(const MethodCall('synth.onError', 'late'));
+
+    expect(events, [
+      'synth Synthesize to file was stopped',
+      'speaker late',
+    ]);
+  });
 }

@@ -55,7 +55,13 @@ class FlutterTtsPlugin internal constructor(
     )
 
     private data class SynthesisRequest(
-        var awaitedResult: Result?
+        val text: String,
+        var awaitedResult: Result?,
+        // From onBeginSynthesis: the rate of the written audio, which word frames count in.
+        var sampleRate: Int = 0,
+        // Whether onRangeStart hands this synthesis its frame first; decided by its first valid word, so one file
+        // never mixes the two orders.
+        var frameFirst: Boolean? = null
     )
 
     private data class SynthesisOutput(
@@ -192,11 +198,20 @@ class FlutterTtsPlugin internal constructor(
                 }
             }
 
+            override fun onBeginSynthesis(
+                utteranceId: String,
+                sampleRateInHz: Int,
+                audioFormat: Int,
+                channelCount: Int
+            ) {
+                dispatchUtteranceCallback { handleSynthesisBegin(utteranceId, sampleRateInHz) }
+            }
+
             // Requires Android 26 or later
             override fun onRangeStart(utteranceId: String, startAt: Int, endAt: Int, frame: Int) {
                 super.onRangeStart(utteranceId, startAt, endAt, frame)
                 dispatchUtteranceCallback {
-                    handleUtteranceProgress(utteranceId, startAt, endAt)
+                    handleUtteranceProgress(utteranceId, startAt, endAt, frame)
                 }
             }
 
@@ -274,9 +289,8 @@ class FlutterTtsPlugin internal constructor(
         if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
             val request = synthesisRequests.remove(utteranceId) ?: return
             finalizeSynthesisOutput(utteranceId, publish = false)
-            resolveResult(request.awaitedResult, 0)
-            request.awaitedResult = null
             invokeMethod("synth.onError", "Synthesize to file was stopped")
+            resolveSynthesisAfterCallback(request, 0)
             return
         }
         val request = speechRequests.remove(utteranceId) ?: return
@@ -288,10 +302,42 @@ class FlutterTtsPlugin internal constructor(
         if (request.focusRequested) releaseAudioFocus(utteranceId)
     }
 
-    private fun handleUtteranceProgress(utteranceId: String, startAt: Int, endAt: Int) {
-        if (utteranceId.startsWith(SILENCE_PREFIX) ||
-            utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)
-        ) return
+    private fun handleSynthesisBegin(utteranceId: String, sampleRate: Int) {
+        if (!utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) return
+        synthesisRequests[utteranceId]?.sampleRate = sampleRate
+    }
+
+    // A word of a synthesis to file, with the audio frame where it is spoken: the app plays the file, so it
+    // times the word itself. Engines that report no ranges while synthesizing never get here.
+    private fun handleSynthesisProgress(utteranceId: String, startAt: Int, endAt: Int, frame: Int) {
+        val request = synthesisRequests[utteranceId] ?: return
+        val length = request.text.length
+        // Android's FileSynthesisCallback.rangeStart(markerInFrames, start, end) hands its arguments to a
+        // dispatcher that takes (start, end, frame), so for a synthesis to file the frame comes first (seen with
+        // Google TTS on Android 17: 360, 1, 4 for the word at 1..4). Use that order; the documented one only when
+        // nothing else fits the text. The first word that fits the order guessed for it decides it.
+        val swapped = request.frameFirst ?: (startAt >= 0 && endAt >= 0 && endAt < frame && frame <= length)
+        val wordStart = if (swapped) endAt else startAt
+        val wordEnd = if (swapped) frame else endAt
+        val wordFrame = if (swapped) startAt else frame
+        if (wordStart < 0 || wordEnd <= wordStart || wordEnd > length || wordFrame < 0 || request.sampleRate <= 0) {
+            return
+        }
+        request.frameFirst = swapped
+        val data = HashMap<String, Int>()
+        data["start"] = wordStart
+        data["end"] = wordEnd
+        data["frame"] = wordFrame
+        data["sampleRate"] = request.sampleRate
+        invokeMethod("synth.onProgress", data)
+    }
+
+    private fun handleUtteranceProgress(utteranceId: String, startAt: Int, endAt: Int, frame: Int) {
+        if (utteranceId.startsWith(SILENCE_PREFIX)) return
+        if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
+            handleSynthesisProgress(utteranceId, startAt, endAt, frame)
+            return
+        }
         val request = speechRequests[utteranceId] ?: return
         val safeStart = startAt.coerceIn(0, request.text.length)
         val safeEnd = endAt.coerceIn(safeStart, request.text.length)
@@ -313,9 +359,8 @@ class FlutterTtsPlugin internal constructor(
         if (utteranceId.startsWith(SYNTHESIZE_TO_FILE_PREFIX)) {
             val request = synthesisRequests.remove(utteranceId) ?: return
             finalizeSynthesisOutput(utteranceId, publish = false)
-            resolveResult(request.awaitedResult, 0)
-            request.awaitedResult = null
             invokeMethod("synth.onError", "$error (synth)")
+            resolveSynthesisAfterCallback(request, 0)
             return
         }
         val request = speechRequests.remove(utteranceId) ?: return
@@ -423,10 +468,19 @@ class FlutterTtsPlugin internal constructor(
         for (utteranceId in utteranceIds) {
             val request = synthesisRequests.remove(utteranceId) ?: continue
             finalizeSynthesisOutput(utteranceId, publish = false)
-            resolveResult(request.awaitedResult, 0)
-            request.awaitedResult = null
             invokeMethod("synth.onError", "Synthesize to file was stopped")
+            resolveSynthesisAfterCallback(request, 0)
         }
+    }
+
+    // Every synthesis ends with its callback before its awaited result: Dart routes synth.* callbacks to the
+    // instance that started the synthesis only until that call answers. invokeMethod posts the callback to the
+    // main looper while an answer given at once leaves at once, ahead of it; posted on the same looper after the
+    // callback, the answer reaches Dart behind it.
+    private fun resolveSynthesisAfterCallback(request: SynthesisRequest, value: Int) {
+        val result = request.awaitedResult ?: return
+        request.awaitedResult = null
+        if (handler?.post { resolveResult(result, value) } != true) resolveResult(result, value)
     }
 
     private fun cancelAllSpeechRequests(clearRequests: Boolean) {
@@ -760,6 +814,7 @@ class FlutterTtsPlugin internal constructor(
                 val utteranceId = SYNTHESIZE_TO_FILE_PREFIX + UUID.randomUUID().toString()
                 val shouldAwaitCompletion = awaitSynthCompletion
                 synthesisRequests[utteranceId] = SynthesisRequest(
+                    text = text,
                     awaitedResult = if (shouldAwaitCompletion) result else null
                 )
                 val synthesizeResult = synthesizeToFile(
@@ -1003,7 +1058,8 @@ class FlutterTtsPlugin internal constructor(
         if (engineReady) tts?.stop()
         notifyLifecycleSpeechCancellations()
         cancelAllSpeechRequests(clearRequests = true)
-        cancelAllSynthesisRequests(clearRequests = true)
+        // Each ends with synth.onError: a caller waiting for the callback would otherwise wait forever.
+        cancelSynthesisRequests(synthesisRequests.keys.toList())
         discardAllSynthesisOutputs()
         releaseAudioFocus()
         shutDownEngine(tts, engineReady)
@@ -1347,15 +1403,13 @@ class FlutterTtsPlugin internal constructor(
             finalization.publishedOutput?.let { deleteMediaStoreOutput(it) }
             return
         }
-        val value = if (finalization.succeeded) 1 else 0
-        resolveResult(request.awaitedResult, value)
-        request.awaitedResult = null
         if (finalization.succeeded) {
             Log.d(tag, "Utterance ID has completed: $utteranceId")
             invokeMethod("synth.onComplete", true)
         } else {
             invokeMethod("synth.onError", "Failed finalizing synthesized audio file")
         }
+        resolveSynthesisAfterCallback(request, if (finalization.succeeded) 1 else 0)
     }
 
     private fun finalizeCopiedSynthesisOutput(utteranceId: String) {

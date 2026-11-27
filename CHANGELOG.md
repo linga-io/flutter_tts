@@ -1,5 +1,22 @@
 # ChangeLog
 
+## Unreleased
+
+- **Android:** `setSynthesisProgressHandler` receives each word range of a
+  `synthesizeToFile` with the audio frame it is spoken at and the file's sample
+  rate, so an app that plays the file can time its words.
+- **Dart:** `synth.*` callbacks go to the instance that started the synthesis;
+  a synthesis no longer takes the speech callbacks of another instance.
+- **Android:** a synthesis to file posts its answer to an awaited
+  `synthesizeToFile` on the main looper behind its `synth.onComplete` or
+  `synth.onError`, so the callback reaches Dart first, while the instance that
+  started the synthesis still owns `synth.*` callbacks (answered at once, the
+  reply overtook the posted callback); `setEngine` ends every synthesis it
+  drops with `synth.onError` instead of leaving it silent.
+- **Android:** the order of `onRangeStart`'s arguments for a synthesis to file
+  is decided by its first word that fits the text, not by one that fits
+  neither order.
+
 ## 5.0.0
 
 ### Features

@@ -575,4 +575,134 @@ void main() {
 
     expect(completions, 0);
   });
+
+  test('synthesis progress delivers the word range with its audio frame',
+      () async {
+    final flutterTts = FlutterTts();
+    final events = <List<int>>[];
+    flutterTts.setSynthesisProgressHandler(
+      (start, end, frame, sampleRate) =>
+          events.add([start, end, frame, sampleRate]),
+    );
+
+    await flutterTts.platformCallHandler(
+      const MethodCall('synth.onProgress', {
+        'start': 6,
+        'end': 11,
+        'frame': 12000,
+        'sampleRate': 24000,
+      }),
+    );
+    for (final malformed in const [
+      {'start': 6, 'end': 6, 'frame': 1, 'sampleRate': 24000},
+      {'start': -1, 'end': 3, 'frame': 1, 'sampleRate': 24000},
+      {'start': 0, 'end': 3, 'frame': -1, 'sampleRate': 24000},
+      {'start': 0, 'end': 3, 'frame': 1, 'sampleRate': 0},
+      {'start': 0, 'end': 3},
+    ]) {
+      await flutterTts.platformCallHandler(
+        MethodCall('synth.onProgress', malformed),
+      );
+    }
+
+    expect(events, [
+      [6, 11, 12000, 24000],
+    ]);
+  });
+
+  test('synthesis callbacks go to the instance that started the synthesis',
+      () async {
+    const channel = MethodChannel('flutter_tts');
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async => 1);
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+
+    final speaker = FlutterTts();
+    final synthesizer = FlutterTts();
+    final events = <String>[];
+    speaker.setCompletionHandler(() => events.add('speaker complete'));
+    speaker.setErrorHandler((_) => events.add('speaker error'));
+    synthesizer.setCompletionHandler(() => events.add('synth complete'));
+    synthesizer.setErrorHandler((_) => events.add('synth error'));
+    synthesizer.setSynthesisProgressHandler(
+      (_, __, ___, ____) => events.add('synth progress'),
+    );
+
+    expect(await speaker.speak('one'), 1);
+    expect(await synthesizer.synthesizeToFile('two', '/tmp/two.wav', true), 1);
+
+    await sendPlatformCallback(const MethodCall('synth.onProgress', {
+      'start': 0,
+      'end': 3,
+      'frame': 0,
+      'sampleRate': 22050,
+    }));
+    await sendPlatformCallback(const MethodCall('speak.onComplete'));
+    await sendPlatformCallback(const MethodCall('synth.onComplete', true));
+    await sendPlatformCallback(const MethodCall('synth.onError', 'stopped'));
+
+    expect(events, [
+      'synth progress',
+      'speaker complete',
+      'synth complete',
+      'synth error',
+    ]);
+  });
+
+  // Dart's side only: given the order the Android plugin keeps (it posts the
+  // answer behind the callback on the main looper), the callback reaches the
+  // instance that started the synthesis. The plugin's own order has no test
+  // here.
+  test(
+      'a synth.onError that arrives before the awaited answer 0 reaches the '
+      'instance that started the synthesis, then synth callbacks go back',
+      () async {
+    const channel = MethodChannel('flutter_tts');
+    final speaker = FlutterTts();
+    final synthesizer = FlutterTts();
+    final events = <String>[];
+    speaker.setErrorHandler((message) => events.add('speaker $message'));
+    synthesizer.setErrorHandler((message) => events.add('synth $message'));
+    var syntheses = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+      if (call.method != 'synthesizeToFile') return 1;
+      switch (++syntheses) {
+        case 1:
+          return 1;
+        case 2:
+          // The order the plugin keeps with awaitSynthCompletion(true): the
+          // callback, then the awaited result.
+          await sendPlatformCallback(
+            const MethodCall('synth.onError', 'Synthesize to file was stopped'),
+          );
+          return 0;
+        default:
+          // Busy with the first synthesis: no callback follows.
+          return 0;
+      }
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null);
+    });
+    expect(await speaker.synthesizeToFile('one', '/tmp/one.wav', true), 1);
+    expect(
+      await synthesizer.synthesizeToFile('two', '/tmp/two.wav', true),
+      0,
+    );
+    expect(
+      await synthesizer.synthesizeToFile('three', '/tmp/three.wav', true),
+      0,
+    );
+    await sendPlatformCallback(const MethodCall('synth.onError', 'late'));
+
+    expect(events, [
+      'synth Synthesize to file was stopped',
+      'speaker late',
+    ]);
+  });
 }

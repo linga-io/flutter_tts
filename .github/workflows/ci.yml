@@ -24,9 +24,12 @@ jobs:
           flutter-version: '3.22.3'
           cache: true
       # The example app needs Flutter 3.47+ (material_ui), so this job checks
-      # only the plugin's own Dart code on the oldest supported Flutter.
-      - run: flutter pub get --no-example
-      - run: flutter analyze lib test
+      # the plugin alone on the oldest supported Flutter. `pub get
+      # --no-example` is not enough: Flutter 3.22 still reads the example's
+      # package config while it regenerates plugin tooling.
+      - run: rm -rf example
+      - run: flutter pub get
+      - run: flutter analyze
       - run: flutter test
 
   dart-and-web:

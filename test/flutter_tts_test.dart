@@ -612,6 +612,8 @@ void main() {
 
   test('synthesis callbacks go to the instance that started the synthesis',
       () async {
+    FlutterTts.debugPlatformOverride = TargetPlatform.android;
+    addTearDown(() => FlutterTts.debugPlatformOverride = null);
     const channel = MethodChannel('flutter_tts');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async => 1);
@@ -660,6 +662,8 @@ void main() {
       'a synth.onError that arrives before the awaited answer 0 reaches the '
       'instance that started the synthesis, then synth callbacks go back',
       () async {
+    FlutterTts.debugPlatformOverride = TargetPlatform.android;
+    addTearDown(() => FlutterTts.debugPlatformOverride = null);
     const channel = MethodChannel('flutter_tts');
     final speaker = FlutterTts();
     final synthesizer = FlutterTts();

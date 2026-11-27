@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, kIsWeb, visibleForTesting;
 
 typedef ErrorHandler = void Function(dynamic message);
 typedef ProgressHandler = void Function(
@@ -496,10 +497,23 @@ class FlutterTts {
     }
   }
 
-  static bool get _isAndroid => !kIsWeb && Platform.isAndroid;
-  static bool get _isIOS => !kIsWeb && Platform.isIOS;
-  static bool get _isMacOS => !kIsWeb && Platform.isMacOS;
-  static bool get _isWindows => !kIsWeb && Platform.isWindows;
+  /// Test-only: the platform the plugin's platform checks see instead of the
+  /// host's, since `dart:io` [Platform] cannot be overridden in tests.
+  @visibleForTesting
+  static TargetPlatform? debugPlatformOverride;
+
+  static bool _runsOn(TargetPlatform target, bool Function() isHost) =>
+      !kIsWeb &&
+      (debugPlatformOverride == null
+          ? isHost()
+          : debugPlatformOverride == target);
+  static bool get _isAndroid =>
+      _runsOn(TargetPlatform.android, () => Platform.isAndroid);
+  static bool get _isIOS => _runsOn(TargetPlatform.iOS, () => Platform.isIOS);
+  static bool get _isMacOS =>
+      _runsOn(TargetPlatform.macOS, () => Platform.isMacOS);
+  static bool get _isWindows =>
+      _runsOn(TargetPlatform.windows, () => Platform.isWindows);
 
   static void _throwUnsupported(String method, String platforms) {
     throw UnsupportedError('$method is only supported on $platforms.');

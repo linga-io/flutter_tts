@@ -48,8 +48,8 @@
   explicit full paths remain supported.
 - `setIosAudioCategory` now propagates platform errors instead of printing and
   returning `null`.
-- The minimum native targets are now Android 24 and iOS 13. Dart 3.4 and
-  Flutter 3.22 remain supported.
+- The minimum native targets are now Android 24 and iOS 13. The minimum
+  Flutter is now 3.50.1; the Dart language version stays 3.4.
 - Android supports AGP 7/8 Kotlin Gradle Plugin hosts and AGP 9 built-in Kotlin.
 - Windows support is limited to Win32 desktop; the unvalidated UWP variant is
   no longer advertised.

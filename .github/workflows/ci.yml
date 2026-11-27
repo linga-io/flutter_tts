@@ -18,19 +18,21 @@ jobs:
   minimum-flutter:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.3'
           cache: true
-      - run: flutter pub get
-      - run: flutter analyze
+      # The example app needs Flutter 3.47+ (material_ui), so this job checks
+      # only the plugin's own Dart code on the oldest supported Flutter.
+      - run: flutter pub get --no-example
+      - run: flutter analyze lib test
       - run: flutter test
 
   dart-and-web:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -46,7 +48,7 @@ jobs:
   android:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -62,7 +64,7 @@ jobs:
   apple:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -76,7 +78,7 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: subosito/flutter-action@v2
         with:
           channel: stable

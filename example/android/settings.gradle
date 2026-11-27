@@ -18,7 +18,10 @@ pluginManagement {
 
 plugins {
     id "dev.flutter.flutter-plugin-loader" version "1.0.0"
-    id "com.android.application" version "9.0.1" apply false
+    id "com.android.application" version "9.5.3" apply false
+    // AGP 9 built-in Kotlin only pulls KGP 2.2.10 at runtime, below Flutter's
+    // minimum. Putting a newer KGP on the classpath makes built-in Kotlin use it.
+    id "org.jetbrains.kotlin.android" version "2.4.21" apply false
 }
 
 include ":app"

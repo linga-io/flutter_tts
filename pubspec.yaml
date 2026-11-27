@@ -29,9 +29,11 @@ flutter:
         fileName: flutter_tts_web.dart
 
 environment:
+  # The Dart language version stays at 3.4 so the sources keep their format;
+  # the toolchain floor follows the Flutter that Linga builds with.
   sdk: ">=3.4.0 <4.0.0"
-  flutter: ">=3.22.0"
+  flutter: ">=3.50.1"
 dev_dependencies:
   flutter_test:
     sdk: flutter
-  lints: ^4.0.0
+  lints: ^6.1.0

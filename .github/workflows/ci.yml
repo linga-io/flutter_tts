@@ -56,6 +56,8 @@ jobs:
         working-directory: example
       - run: ./gradlew :flutter_tts:lintDebug
         working-directory: example/android
+      - run: ./gradlew :flutter_tts:testDebugUnitTest
+        working-directory: example/android
 
   apple:
     runs-on: macos-latest

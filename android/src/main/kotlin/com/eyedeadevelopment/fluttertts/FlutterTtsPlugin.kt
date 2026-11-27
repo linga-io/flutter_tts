@@ -34,7 +34,12 @@ import java.util.concurrent.Executors
 
 
 /** FlutterTtsPlugin  */
-class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
+class FlutterTtsPlugin internal constructor(
+    private val startShutdownThread: (Thread) -> Unit
+) : MethodCallHandler, FlutterPlugin {
+    // Flutter's generated plugin registrant calls this one.
+    constructor() : this({ it.start() })
+
     private data class PendingMethodCall(
         val call: MethodCall,
         val result: Result
@@ -1032,14 +1037,21 @@ class FlutterTtsPlugin : MethodCallHandler, FlutterPlugin {
             return
         }
         // ponytail: one parked thread per abandoned engine until its service answers; an executor if this repeats.
-        Thread({
+        // On a low-memory phone the OS can refuse the thread (ART reports that as OutOfMemoryError). Skip the
+        // shutdown then rather than crash the app: the old engine stays bound until the process ends.
+        val thread = Thread({
             try {
                 textToSpeech.shutdown()
             } catch (error: RuntimeException) {
                 // Unbinding a connection Android already dropped throws; off the method channel it would crash.
                 Log.w(tag, "Shutting down an uninitialized engine failed: ${error.message}")
             }
-        }, "TtsEngineShutdown").start()
+        }, "TtsEngineShutdown")
+        try {
+            startShutdownThread(thread)
+        } catch (error: OutOfMemoryError) {
+            Log.w(tag, "Could not start the engine shutdown thread, skipping shutdown: ${error.message}")
+        }
     }
 
     private fun setLanguage(language: String?, result: Result) {
